@@ -26,6 +26,7 @@ class RustDocsServer {
   private persistDir: string;
   private docsPath: string;
   private crateName: string;
+  private toolName: string;
 
   constructor(docsPath: string, crateName: string) {
     this.server = new Server(
@@ -44,24 +45,39 @@ class RustDocsServer {
     this.persistDir = path.join(__dirname, "storage", this.crateName);
     this.docsPath = docsPath;
     this.setupToolHandlers();
+    this.toolName = `query_rust_docs_${this.crateName}`;
   }
 
   private async initializeIndex() {
     try {
-      const indexExists = fs.existsSync(
-        path.join(this.persistDir, "vector_store.json")
-      );
+      const indexExists =
+        fs.existsSync(path.join(this.persistDir, "vector_store.json")) &&
+        fs.existsSync(path.join(this.persistDir, "doc_store.json")) &&
+        fs.existsSync(path.join(this.persistDir, "index_store.json"));
+
+      if (indexExists) {
+        console.log("Loading existing vector store from", this.persistDir);
+        const storageContext = await storageContextFromDefaults({
+          persistDir: this.persistDir,
+        });
+        this.index = await VectorStoreIndex.init({ storageContext });
+        return;
+      } else {
+        // Clear only the files inside the persist directory, not the directory itself
+        if (fs.existsSync(this.persistDir)) {
+          const files = fs.readdirSync(this.persistDir);
+          for (const file of files) {
+            fs.unlinkSync(path.join(this.persistDir, file));
+          }
+        } else {
+          // Ensure the directory exists if it was never created
+          fs.mkdirSync(this.persistDir, { recursive: true });
+        }
+      }
 
       const storageContext = await storageContextFromDefaults({
         persistDir: this.persistDir,
       });
-
-      if (indexExists) {
-        console.log("Loading existing vector store from", this.persistDir);
-        this.index = await VectorStoreIndex.init({ storageContext });
-        return;
-      }
-
       this.index = await VectorStoreIndex.fromDocuments(
         await loadCrateDocs(this.docsPath, this.crateName),
         {
@@ -80,7 +96,7 @@ class RustDocsServer {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
-          name: "query_rust_docs",
+          name: this.toolName,
           description: `Query the official Rust documentation for the '${this.crateName}' crate. Use this tool to retrieve detailed information about '${this.crateName}'’s API, including structs, traits, enums, constants, and functions. Ideal for answering technical questions about how to use '${this.crateName}' in Rust projects, such as understanding specific methods, configuration options, or integration details. Additionally, leverage this tool to ensure accuracy of written code by verifying API usage and to resolve Clippy or lint errors by clarifying correct implementations. For example, use it for questions like "How do I configure routing in ${this.crateName}?", "What does this ${this.crateName} struct do?", "Is this ${this.crateName} method call correct?", or "How do I fix a Clippy warning about ${this.crateName} in my code?"`,
           inputSchema: {
             type: "object",
@@ -100,36 +116,36 @@ class RustDocsServer {
         },
       ],
     }));
-  
+
     this.server.setRequestHandler(
       CallToolRequestSchema,
       async (request: CallToolRequest) => {
-        if (request.params.name !== "query_rust_docs") {
+        if (request.params.name !== this.toolName) {
           throw new McpError(
             ErrorCode.MethodNotFound,
             `Unknown tool: ${request.params.name}`
           );
         }
-  
+
         const { question, crate } = request.params.arguments as {
           question: string;
           crate: string;
         };
-  
+
         if (crate !== this.crateName) {
           throw new McpError(
             ErrorCode.InvalidParams,
             `This server only supports queries for '${this.crateName}', not '${crate}'`
           );
         }
-  
+
         try {
           const queryEngine = this.index.asQueryEngine();
           const response: EngineResponse = await queryEngine.query({
             query: question,
             stream: false,
           });
-  
+
           return {
             content: [
               {
@@ -162,9 +178,12 @@ if (!process.env.CRATE_NAME) {
 if (!process.env.DOCS_PATH) {
   throw new Error("DOCS_PATH environment variable must be set");
 }
-if (!process.env.OPENAI_API_KEY) { 
+if (!process.env.OPENAI_API_KEY) {
   throw new Error("OPENAI_API_KEY environment variable must be set");
 }
 
-const server = new RustDocsServer(process.env.DOCS_PATH, process.env.CRATE_NAME);
+const server = new RustDocsServer(
+  process.env.DOCS_PATH,
+  process.env.CRATE_NAME
+);
 server.run().catch(console.error);

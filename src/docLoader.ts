@@ -1,5 +1,5 @@
 import { HTMLReader } from "@llamaindex/readers/html";
-import { glob } from "glob";
+import { glob, GlobOptions } from "glob";
 import path from "path";
 import fs from "fs/promises";
 import { Document } from "llamaindex";
@@ -15,51 +15,60 @@ export async function loadCrateDocs(
 ): Promise<Document<Metadata>[]> {
   const docsPath = path.join(rootDocsPath, crateName);
   const pattern: string = "**/*.html";
-  const options: import("glob").GlobOptions = {
+  const options: GlobOptions = {
     cwd: docsPath,
     ignore: "**/index.html",
     withFileTypes: false,
   };
 
-  const htmlFiles: string[] = await glob(pattern, options) as string[];
+  const htmlFiles: string[] = (await glob(pattern, options)) as string[];
   console.log("found # html files (initial):", htmlFiles.length);
 
-  // Group files by basename and count occurrences
-  const basenameGroups: { [key: string]: string[] } = {};
-  htmlFiles.forEach((file: string) => {
-    const basename: string = path.basename(file);
-    if (!basenameGroups[basename]) {
-      basenameGroups[basename] = [];
-    }
-    basenameGroups[basename].push(file);
-  });
+  // Check the dangerous flag
+  const includeAllDangerously = process.env.INCLUDE_ALL_DOCS_DANGEROUSLY === "true";
+  let filesToProcess: string[] = [];
 
-  // Filter for duplicate basenames and pick largest file
-  const uniqueDuplicateFiles: string[] = [];
-  for (const [basename, files] of Object.entries(basenameGroups)) {
-    if (files.length > 1) {
-      const largestFile = await files.reduce(
-        async (largestPromise, current) => {
-          const largest = await largestPromise;
-          const largestStats = await fs.stat(path.join(docsPath, largest));
-          const currentStats = await fs.stat(path.join(docsPath, current));
-          return largestStats.size > currentStats.size ? largest : current;
-        },
-        Promise.resolve(files[0])
-      );
-      uniqueDuplicateFiles.push(largestFile);
+  if (includeAllDangerously) {
+    console.warn(
+      `WARNING: INCLUDE_ALL_DOCS_DANGEROUSLY is enabled for ${crateName}. Processing all ${htmlFiles.length} HTML files. This may incur significant time or cost (e.g., embedding calls).`
+    );
+    filesToProcess = htmlFiles;
+  } else {
+    // Group files by basename and count occurrences
+    const basenameGroups: { [key: string]: string[] } = {};
+    htmlFiles.forEach((file: string) => {
+      const basename: string = path.basename(file);
+      if (!basenameGroups[basename]) {
+        basenameGroups[basename] = [];
+      }
+      basenameGroups[basename].push(file);
+    });
+
+    // Filter for duplicate basenames and pick largest file
+    for (const [basename, files] of Object.entries(basenameGroups)) {
+      if (files.length > 1) {
+        const largestFile = await files.reduce(
+          async (largestPromise, current) => {
+            const largest = await largestPromise;
+            const largestStats = await fs.stat(path.join(docsPath, largest));
+            const currentStats = await fs.stat(path.join(docsPath, current));
+            return largestStats.size > currentStats.size ? largest : current;
+          },
+          Promise.resolve(files[0])
+        );
+        filesToProcess.push(largestFile);
+      }
     }
+    console.log(
+      "found # unique duplicate html files for crate " + crateName + ":",
+      filesToProcess.length
+    );
   }
 
-  console.log(
-    "found # unique duplicate html files for crate " + crateName + ":",
-    uniqueDuplicateFiles.length
-  );
-
-  // Process the unique duplicate files with HTMLReader
+  // Process the selected files with HTMLReader
   const htmlReader: HTMLReader = new HTMLReader();
   const docs: Document<Metadata>[][] = await Promise.all(
-    uniqueDuplicateFiles.map(async (filePath: string) => {
+    filesToProcess.map(async (filePath: string) => {
       const fullFilePath: string = path.join(docsPath, filePath);
       const fileDocs: Document<Metadata>[] = await htmlReader.loadData(fullFilePath);
       console.log("Loaded:", filePath);
@@ -73,7 +82,7 @@ export async function loadCrateDocs(
   );
 
   const foundDocs: Document<Metadata>[] = docs.flat();
-  console.log("found # docs from unique duplicates:", foundDocs.length);
+  console.log("found # docs from processed files:", foundDocs.length);
   return foundDocs;
 }
 
