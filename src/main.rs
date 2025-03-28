@@ -27,6 +27,7 @@ use ndarray::Array1;
 use std::fs::{self, File};
 use std::io::BufReader; // Removed unused BufWriter
 use std::path::PathBuf; // Removed unused Path
+use xdg::BaseDirectories;
 use bincode::{
     config,
     // serde::OwnedSerdeDecoder, // No longer needed
@@ -40,17 +41,23 @@ async fn main() -> Result<(), ServerError> {
     // Load .env file if present
     dotenvy::dotenv().ok();
 
-    // Get required environment variables
-    let crate_name =
-        env::var("CRATE_NAME").map_err(|_| ServerError::MissingEnvVar("CRATE_NAME".to_string()))?;
-    let docs_path =
-        env::var("DOCS_PATH").map_err(|_| ServerError::MissingEnvVar("DOCS_PATH".to_string()))?;
+    // Get crate name and version from command line arguments
+    let mut args = env::args().skip(1); // Skip program name
+    let crate_name = args.next().ok_or_else(|| {
+        eprintln!("Usage: rustdocs_mcp_server <CRATE_NAME> <CRATE_VERSION>");
+        ServerError::MissingArgument("CRATE_NAME".to_string())
+    })?;
+    let crate_version = args.next().ok_or_else(|| {
+        eprintln!("Usage: rustdocs_mcp_server <CRATE_NAME> <CRATE_VERSION>");
+        ServerError::MissingArgument("CRATE_VERSION".to_string())
+    })?;
+
     let _openai_api_key = env::var("OPENAI_API_KEY")
         .map_err(|_| ServerError::MissingEnvVar("OPENAI_API_KEY".to_string()))?; // Needed later
 
-    // Load documents
-    println!("Loading documents from: {}", docs_path);
-    let documents = load_documents(&docs_path)?;
+    // Load documents by generating them dynamically
+    println!("Loading documents for crate: {}", crate_name);
+    let documents = load_documents(&crate_name, &crate_version)?; // Pass crate_name and crate_version
     println!("Loaded {} documents.", documents.len());
 
     // Initialize OpenAI client and set it in the OnceLock
@@ -60,8 +67,16 @@ async fn main() -> Result<(), ServerError> {
         .expect("Failed to set OpenAI client");
 
     // --- Persistence Logic ---
-    let persist_dir = PathBuf::from("storage").join(&crate_name);
-    let embeddings_file_path = persist_dir.join("embeddings.bin");
+    // Use XDG Base Directory specification for data storage
+    let xdg_dirs = BaseDirectories::with_prefix("rustdocs-mcp-server")
+        .map_err(|e| ServerError::Xdg(format!("Failed to get XDG directories: {}", e)))?; // Use the new Xdg variant
+
+    // Construct the path within the XDG data directory, including the crate name
+    let relative_path = PathBuf::from(&crate_name).join("embeddings.bin");
+
+    // Use place_data_file to get the full path and ensure parent directories exist
+    let embeddings_file_path = xdg_dirs.place_data_file(relative_path)
+        .map_err(ServerError::Io)?; // Map IO error if directory creation fails
 
     let embeddings = if embeddings_file_path.exists() {
         println!("Loading embeddings from: {:?}", embeddings_file_path);
@@ -105,9 +120,7 @@ async fn main() -> Result<(), ServerError> {
     let embeddings = match embeddings {
         Some(e) => e,
         None => {
-            // Ensure persist directory exists
-            fs::create_dir_all(&persist_dir)
-                .map_err(|e| ServerError::Io(e))?; // Map IO error
+            // Directory creation is handled by xdg_dirs.place_data_file
 
             // Generate embeddings
             println!("Generating embeddings...");

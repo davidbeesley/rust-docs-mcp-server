@@ -56,7 +56,7 @@
             rustVersion = "stable";
             # Example configuration:
             # withTools = [ ];  # Will be prefixed with cargo-
-            # extraPackages = [ ];
+            extraPackages = [ pkgs.openssl.dev pkgs.pkg-config ]; # Add openssl dev libs and pkg-config
             # ide.type = "none";
           };
 

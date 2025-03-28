@@ -3758,6 +3758,7 @@ checksum = "781442f29170c5c93b7185ad559492601acdc71d5bb0706f5868094f45cfcd08"
 name = "rustdocs_mcp_server"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-openai",
  "async-trait",
  "bincode",
@@ -3769,10 +3770,12 @@ dependencies = [
  "scraper",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tiktoken-rs",
  "tokio",
  "walkdir",
+ "xdg",
 ]
 
 [[package]]
@@ -5298,6 +5301,15 @@ name = "writeable"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e9df38ee2d2c3c5948ea468a8406ff0db0b29ae1ffde1bcf20ef305bcc95c51"
+
+[[package]]
+name = "xdg"
+version = "2.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "213b7324336b53d2414b2db8537e56544d981803139155afa84f76eeebb7a546"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "yoke"
