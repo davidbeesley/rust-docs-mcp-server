@@ -38,6 +38,7 @@ pub struct Document {
 /// then loads and parses the HTML documents.
 /// Extracts text content from the main content area of rustdoc generated HTML.
 pub fn load_documents(crate_name: &str, _crate_version: &str) -> Result<Vec<Document>, DocLoaderError> { // Mark version as unused for now
+    println!("[DEBUG] load_documents called with crate_name: '{}', crate_version: '{}'", crate_name, _crate_version);
     let mut documents = Vec::new();
 
     let temp_dir = tempdir().map_err(DocLoaderError::TempDirCreationFailed)?;
@@ -51,20 +52,34 @@ pub fn load_documents(crate_name: &str, _crate_version: &str) -> Result<Vec<Docu
 
     // Execute `cargo doc` using std::process::Command
     // --- Use Cargo API ---
-    let config = GlobalContext::default()?;
+    let mut config = GlobalContext::default()?; // Make mutable
+    // Configure context for quiet operation
+    config.configure(
+        0,     // verbose
+        true,  // quiet
+        None,  // color
+        false, // frozen
+        false, // locked
+        false, // offline
+        &None, // target_dir (Using ws.set_target_dir instead)
+        &[],   // unstable_flags
+        &[],   // cli_config
+    )?;
     // config.shell().set_verbosity(Verbosity::Quiet); // Keep commented
 
     let current_dir = std::env::current_dir()?;
     let mut ws = Workspace::new(&current_dir.join("Cargo.toml"), &config)?; // Make ws mutable
+    println!("[DEBUG] Workspace target dir before set: {}", ws.target_dir().as_path_unlocked().display());
     // Set target_dir directly on Workspace
     ws.set_target_dir(cargo::util::Filesystem::new(temp_dir_path.to_path_buf()));
+    println!("[DEBUG] Workspace target dir after set: {}", ws.target_dir().as_path_unlocked().display());
 
     // Create CompileOptions, relying on ::new for BuildConfig
     let mut compile_opts = CompileOptions::new(&config, cargo::core::compiler::CompileMode::Doc { deps: false, json: false })?;
     // Specify the package explicitly
     let package_spec = crate_name.replace('-', "_"); // Just use name (with underscores)
     compile_opts.cli_features = CliFeatures::new_all(false); // Use new_all(false)
-    compile_opts.spec = Packages::Packages(vec![package_spec]);
+    compile_opts.spec = Packages::Packages(vec![package_spec.clone()]); // Clone spec
 
     // Create DocOptions: Pass compile options
     let doc_opts = DocOptions {
@@ -72,6 +87,7 @@ pub fn load_documents(crate_name: &str, _crate_version: &str) -> Result<Vec<Docu
         open_result: false, // Don't open in browser
         output_format: ops::OutputFormat::Html,
     };
+    println!("[DEBUG] package_spec for CompileOptions: '{}'", package_spec);
 
     ops::doc(&ws, &doc_opts).map_err(DocLoaderError::CargoLib)?; // Use ws
     // --- End Cargo API ---
@@ -80,6 +96,11 @@ pub fn load_documents(crate_name: &str, _crate_version: &str) -> Result<Vec<Docu
     let crate_name_underscores = crate_name.replace('-', "_");
     let docs_path = temp_dir_path.join("doc").join(&crate_name_underscores);
 
+    // Debug print relevant options before calling ops::doc
+    println!("[DEBUG] CompileOptions spec: {:?}", doc_opts.compile_opts.spec);
+    println!("[DEBUG] CompileOptions cli_features: {:?}", doc_opts.compile_opts.cli_features);
+    println!("[DEBUG] CompileOptions build_config mode: {:?}", doc_opts.compile_opts.build_config.mode);
+    println!("[DEBUG] DocOptions output_format: {:?}", doc_opts.output_format);
     if !docs_path.exists() || !docs_path.is_dir() {
          return Err(DocLoaderError::CargoLib(anyhow::anyhow!(
              "Generated documentation not found at expected path: {}. Check crate name and cargo doc output.",
@@ -88,13 +109,16 @@ pub fn load_documents(crate_name: &str, _crate_version: &str) -> Result<Vec<Docu
     }
     println!("Generated documentation path: {}", docs_path.display());
 
+    println!("[DEBUG] ops::doc called successfully.");
 
     // Define the CSS selector for the main content area in rustdoc HTML
     // This might need adjustment based on the exact rustdoc version/theme
     let content_selector = Selector::parse("section#main-content.content")
         .map_err(|e| DocLoaderError::Selector(e.to_string()))?;
+    println!("[DEBUG] Calculated final docs_path: {}", docs_path.display());
 
     println!("Starting document loading from: {}", docs_path.display());
+        println!("[DEBUG] docs_path does not exist or is not a directory.");
 
     for entry in WalkDir::new(docs_path)
         .into_iter()
