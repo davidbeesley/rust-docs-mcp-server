@@ -24,87 +24,109 @@ jobs:
     strategy:
       matrix:
         include:
+          # Nix builds (native)
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest # Use Linux runner for cross-compilation via Docker
+            os: ubuntu-latest
+            build_method: nix
             asset_name_suffix: linux-x86_64
             binary_name_suffix: ""
           - target: x86_64-apple-darwin
             os: macos-latest
+            build_method: nix
             asset_name_suffix: macos-x86_64
             binary_name_suffix: ""
+          # Cross builds
           - target: aarch64-apple-darwin
-            os: macos-latest # Can build aarch64 on x86_64 macOS runners
+            os: macos-latest # Cross-compile from x86_64 runner
+            build_method: cross
             asset_name_suffix: macos-aarch64
             binary_name_suffix: ""
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            build_method: cross
             asset_name_suffix: windows-x86_64.exe
-            binary_name_suffix: ".exe" # Add .exe for Windows binary name
+            binary_name_suffix: ".exe"
 
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # No need to explicitly set up Rust toolchain, actions-rust-cross handles it
-      # No need to manually install cross
-
-      - name: Build binary using actions-rust-cross
-        uses: houseabsolute/actions-rust-cross@v1
+      # --- Nix Setup (only runs if build_method is nix) ---
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        if: matrix.build_method == 'nix'
         with:
-          # command: 'build' # Default is build
-          target: ${{ matrix.target }}
-          args: "--release --verbose"
-          strip: false # Set to true if you want to strip binaries where possible (not cross-compiled ones)
-          # cross-version: latest # Default is latest release, usually fine
-          # use-rust-cache: true # Default is true, uses Swatinem/rust-cache
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          # Ensure flakes are enabled (default in recent versions, but explicit is safe)
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
+      # --- Dependency Setup for Cross-Compile (only runs if build_method is cross) ---
+      - name: Install macOS dependencies (for cross-compile)
+        # Only needed when cross-compiling aarch64 on an x86_64 macOS runner
+        if: matrix.build_method == 'cross' && matrix.target == 'aarch64-apple-darwin'
         run: |
           brew install openssl@3 pkg-config
           echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> $GITHUB_ENV
 
+      # --- Build Steps (conditional) ---
+      - name: Build binary using Nix
+        if: matrix.build_method == 'nix'
+        # Assuming your flake provides the crate binary via the default package `.#rustdocs_mcp_server`
+        # or adjust the flake output reference as needed (e.g., .#packages.${system}.default)
+        run: nix build .#${CRATE_NAME} --print-build-logs
 
+      - name: Build binary using actions-rust-cross
+        if: matrix.build_method == 'cross'
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          target: ${{ matrix.target }}
+          args: "--release --verbose"
+          strip: false # Keep strip false for consistency, especially with cross-compiles
+
+      # --- Artifact Handling ---
       - name: Determine Artifact Path and Name
         id: artifact_details
         shell: bash
         run: |
           BINARY_NAME="${{ env.CRATE_NAME }}${{ matrix.binary_name_suffix }}"
           ASSET_NAME="${{ env.CRATE_NAME }}-${{ matrix.asset_name_suffix }}"
-          # actions-rust-cross places output in the standard target directory
-          TARGET_DIR="target/${{ matrix.target }}/release"
-          BINARY_PATH="$TARGET_DIR/$BINARY_NAME"
 
+          if [[ "${{ matrix.build_method }}" == "nix" ]]; then
+            # Nix build output path (adjust if flake output is different)
+            # Assumes the binary is directly in result/bin/
+            BINARY_PATH="./result/bin/$BINARY_NAME"
+          else
+            # Cross build output path
+            BINARY_PATH="target/${{ matrix.target }}/release/$BINARY_NAME"
+          fi
+
+          echo "Build method: ${{ matrix.build_method }}"
           echo "Calculated binary path: $BINARY_PATH"
           echo "Calculated asset name: $ASSET_NAME"
 
           # Check if the binary exists
           if [[ ! -f "$BINARY_PATH" ]]; then
             echo "Error: Binary not found at $BINARY_PATH"
-            echo "Listing contents of $TARGET_DIR:"
-            # Ensure the target directory exists before listing
-            if [[ -d "$TARGET_DIR" ]]; then
-              ls -l "$TARGET_DIR"
-            else
-              echo "Target directory $TARGET_DIR does not exist."
-              echo "Listing contents of ./target directory:"
-              ls -l ./target
-            fi
+            echo "Listing contents of potential output directories:"
+            echo "--- Nix build (./result/bin):"
+            ls -l ./result/bin || echo "Directory ./result/bin not found or empty."
+            echo "--- Cross build (target/${{ matrix.target }}/release):"
+            ls -l target/${{ matrix.target }}/release || echo "Directory target/${{ matrix.target }}/release not found or empty."
             exit 1
           fi
 
-          # Rename binary to the desired asset name for easier upload/download
-          mv "$BINARY_PATH" "$TARGET_DIR/$ASSET_NAME"
-          echo "Renamed binary to $TARGET_DIR/$ASSET_NAME"
+          # Create a temporary directory for consistent artifact upload
+          mkdir -p ./artifacts_temp
+          RENAMED_PATH="./artifacts_temp/$ASSET_NAME"
+          # Move the binary to the temp dir with the final asset name
+          mv "$BINARY_PATH" "$RENAMED_PATH"
+          echo "Moved/Renamed binary to $RENAMED_PATH"
 
-          echo "asset_path=$TARGET_DIR/$ASSET_NAME" >> $GITHUB_OUTPUT
+          echo "asset_path=$RENAMED_PATH" >> $GITHUB_OUTPUT
           echo "asset_name=$ASSET_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload Artifact
