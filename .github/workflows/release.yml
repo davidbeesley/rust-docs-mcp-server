@@ -5,95 +5,69 @@ on:
     tags:
       - 'v*.*.*' # Trigger on version tags like v1.0.0
   workflow_dispatch: # Allows manual triggering
+    inputs:
+      version:
+        description: 'The version tag to use for the release (e.g., v1.0.0)'
+        required: true
+        type: string
 
 permissions:
-  contents: write # Needed to create releases and upload assets
+  contents: write # Needed for softprops/action-gh-release to create releases and upload assets
 
 env:
   CARGO_TERM_COLOR: always
   CRATE_NAME: rustdocs_mcp_server
 
 jobs:
-  create_release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-    steps:
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
-          body: |
-            Automated release for ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-
-  build_release:
-    name: Build Release Assets
-    needs: create_release
+  build_assets:
+    name: Build Asset (${{ matrix.target }})
     strategy:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-latest # Use Linux runner for cross-compilation via Docker
             asset_name_suffix: linux-x86_64
+            binary_name_suffix: ""
           - target: x86_64-apple-darwin
             os: macos-latest
             asset_name_suffix: macos-x86_64
+            binary_name_suffix: ""
           - target: aarch64-apple-darwin
             os: macos-latest # Can build aarch64 on x86_64 macOS runners
             asset_name_suffix: macos-aarch64
+            binary_name_suffix: ""
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            asset_name_suffix: windows-x86_64.exe # Add .exe for Windows
+            asset_name_suffix: windows-x86_64.exe
+            binary_name_suffix: ".exe" # Add .exe for Windows binary name
 
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # No need to explicitly set up Rust toolchain, actions-rust-cross handles it
+      # No need to manually install cross
+
+      - name: Build binary using actions-rust-cross
+        uses: houseabsolute/actions-rust-cross@v1
         with:
-          targets: ${{ matrix.target }} # Ensure the target is installed for the host
-
-      - name: Install cross-rs
-        if: runner.os != 'Windows' # cross doesn't work on Windows runners directly for MSVC target
-        run: cargo install cross --git https://github.com/cross-rs/cross --rev 1131999 # Use specific rev for stability
-
-      - name: Build binary (cross)
-        if: runner.os != 'Windows'
-        run: cross build --release --target ${{ matrix.target }} --verbose
-        env:
-          # Set linker for Linux MUSL if needed, otherwise default GNU is fine
-          # For macOS, default linker works
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: gcc
-          # Add other specific env vars if needed for cross-compilation
-
-      - name: Build binary (native Windows)
-        if: runner.os == 'Windows'
-        run: cargo build --release --target ${{ matrix.target }} --verbose
+          # command: 'build' # Default is build
+          target: ${{ matrix.target }}
+          args: "--release --verbose"
+          strip: false # Set to true if you want to strip binaries where possible (not cross-compiled ones)
+          # cross-version: latest # Default is latest release, usually fine
+          # use-rust-cache: true # Default is true, uses Swatinem/rust-cache
 
       - name: Determine Artifact Path and Name
         id: artifact_details
         shell: bash
         run: |
-          BINARY_NAME="${{ env.CRATE_NAME }}"
-          ASSET_SUFFIX="${{ matrix.asset_name_suffix }}"
+          BINARY_NAME="${{ env.CRATE_NAME }}${{ matrix.binary_name_suffix }}"
+          ASSET_NAME="${{ env.CRATE_NAME }}-${{ matrix.asset_name_suffix }}"
+          # actions-rust-cross places output in the standard target directory
           TARGET_DIR="target/${{ matrix.target }}/release"
-
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            BINARY_PATH="$TARGET_DIR/$BINARY_NAME.exe"
-            ASSET_NAME="$BINARY_NAME-$ASSET_SUFFIX" # Suffix already includes .exe
-          else
-            BINARY_PATH="$TARGET_DIR/$BINARY_NAME"
-            ASSET_NAME="$BINARY_NAME-$ASSET_SUFFIX"
-          fi
+          BINARY_PATH="$TARGET_DIR/$BINARY_NAME"
 
           echo "Calculated binary path: $BINARY_PATH"
           echo "Calculated asset name: $ASSET_NAME"
@@ -101,22 +75,56 @@ jobs:
           # Check if the binary exists
           if [[ ! -f "$BINARY_PATH" ]]; then
             echo "Error: Binary not found at $BINARY_PATH"
-            # List directory contents for debugging
             echo "Listing contents of $TARGET_DIR:"
-            ls -l "$TARGET_DIR"
+            # Ensure the target directory exists before listing
+            if [[ -d "$TARGET_DIR" ]]; then
+              ls -l "$TARGET_DIR"
+            else
+              echo "Target directory $TARGET_DIR does not exist."
+              echo "Listing contents of ./target directory:"
+              ls -l ./target
+            fi
             exit 1
           fi
 
-          echo "binary_path=$BINARY_PATH" >> $GITHUB_OUTPUT
+          # Rename binary to the desired asset name for easier upload/download
+          mv "$BINARY_PATH" "$TARGET_DIR/$ASSET_NAME"
+          echo "Renamed binary to $TARGET_DIR/$ASSET_NAME"
+
+          echo "asset_path=$TARGET_DIR/$ASSET_NAME" >> $GITHUB_OUTPUT
           echo "asset_name=$ASSET_NAME" >> $GITHUB_OUTPUT
 
-
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          upload_url: ${{ needs.create_release.outputs.upload_url }}
-          asset_path: ${{ steps.artifact_details.outputs.binary_path }}
-          asset_name: ${{ steps.artifact_details.outputs.asset_name }}
-          asset_content_type: application/octet-stream
+          name: ${{ steps.artifact_details.outputs.asset_name }} # Use asset name for artifact name
+          path: ${{ steps.artifact_details.outputs.asset_path }}
+          if-no-files-found: error # Error if the artifact isn't found
+
+  release:
+    name: Create GitHub Release
+    needs: build_assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts # Download all artifacts to a directory named 'artifacts'
+
+      - name: List downloaded artifacts for debugging
+        run: |
+          echo "Listing downloaded artifacts:"
+          find artifacts -type f
+          echo "---"
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          # Use the input version for manual triggers, otherwise use the tag ref
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
+          name: Release ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
+          body: |
+            Automated release for ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
+          draft: false
+          prerelease: false
+          files: artifacts/*/* # Upload all files from all subdirectories within artifacts
