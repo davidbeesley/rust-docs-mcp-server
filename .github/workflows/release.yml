@@ -24,68 +24,59 @@ jobs:
     strategy:
       matrix:
         include:
-          # Nix builds (native)
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            build_method: nix
+            os: ubuntu-latest # Use Linux runner for Nix
             asset_name_suffix: linux-x86_64
             binary_name_suffix: ""
+            use_nix: true
           - target: x86_64-apple-darwin
-            os: macos-latest
-            build_method: nix
+            os: macos-latest # Use macOS runner for Nix
             asset_name_suffix: macos-x86_64
             binary_name_suffix: ""
-          # Cross builds
+            use_nix: true
           - target: aarch64-apple-darwin
-            os: macos-latest # Cross-compile from x86_64 runner
-            build_method: cross
+            os: macos-latest # Use macOS runner for Nix
             asset_name_suffix: macos-aarch64
             binary_name_suffix: ""
+            use_nix: true
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            build_method: cross
+            os: windows-latest # Windows runner, build natively
             asset_name_suffix: windows-x86_64.exe
             binary_name_suffix: ".exe"
+            use_nix: false
 
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # --- Nix Setup (only runs if build_method is nix) ---
+      # --- Nix Setup (Linux/macOS) ---
       - name: Install Nix
+        if: matrix.use_nix == true
         uses: cachix/install-nix-action@v31
-        if: matrix.build_method == 'nix'
         with:
+          # Use GitHub token to avoid rate limiting when fetching flakes
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-          # Ensure flakes are enabled (default in recent versions, but explicit is safe)
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+          # extra_nix_config: |
+          #   experimental-features = nix-command flakes
 
-      # --- Dependency Setup for Cross-Compile (only runs if build_method is cross) ---
-      - name: Install macOS dependencies (for cross-compile)
-        # Only needed when cross-compiling aarch64 on an x86_64 macOS runner
-        if: matrix.build_method == 'cross' && matrix.target == 'aarch64-apple-darwin'
-        run: |
-          brew install openssl@3 pkg-config
-          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> $GITHUB_ENV
-
-      # --- Build Steps (conditional) ---
-      - name: Build binary using Nix
-        if: matrix.build_method == 'nix'
-        # Assuming your flake provides the crate binary via the default package `.#rustdocs_mcp_server`
-        # or adjust the flake output reference as needed (e.g., .#packages.${system}.default)
-        run: nix build .#${CRATE_NAME} --print-build-logs
-
-      - name: Build binary using actions-rust-cross
-        if: matrix.build_method == 'cross'
-        uses: houseabsolute/actions-rust-cross@v1
+      # --- Native Rust Setup (Windows) ---
+      - name: Set up Rust toolchain (Windows only)
+        if: matrix.use_nix == false
+        uses: dtolnay/rust-toolchain@stable
         with:
-          target: ${{ matrix.target }}
-          args: "--release --verbose"
-          strip: false # Keep strip false for consistency, especially with cross-compiles
+          targets: ${{ matrix.target }}
+
+      # --- Build Step ---
+      - name: Build binary (Nix)
+        if: matrix.use_nix == true
+        # Run the cargo build command within the Nix development shell
+        # This ensures all dependencies from flake.nix (like openssl) are available
+        run: nix develop .#rust-dev --command cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Build binary (Windows Native)
+        if: matrix.use_nix == false
+        run: cargo build --release --target ${{ matrix.target }} --verbose
 
       # --- Artifact Handling ---
       - name: Determine Artifact Path and Name
@@ -94,47 +85,38 @@ jobs:
         run: |
           BINARY_NAME="${{ env.CRATE_NAME }}${{ matrix.binary_name_suffix }}"
           ASSET_NAME="${{ env.CRATE_NAME }}-${{ matrix.asset_name_suffix }}"
+          TARGET_DIR="target/${{ matrix.target }}/release"
+          BINARY_PATH="$TARGET_DIR/$BINARY_NAME"
 
-          if [[ "${{ matrix.build_method }}" == "nix" ]]; then
-            # Nix build output path (adjust if flake output is different)
-            # Assumes the binary is directly in result/bin/
-            BINARY_PATH="./result/bin/$BINARY_NAME"
-          else
-            # Cross build output path
-            BINARY_PATH="target/${{ matrix.target }}/release/$BINARY_NAME"
-          fi
-
-          echo "Build method: ${{ matrix.build_method }}"
           echo "Calculated binary path: $BINARY_PATH"
           echo "Calculated asset name: $ASSET_NAME"
 
-          # Check if the binary exists
           if [[ ! -f "$BINARY_PATH" ]]; then
             echo "Error: Binary not found at $BINARY_PATH"
-            echo "Listing contents of potential output directories:"
-            echo "--- Nix build (./result/bin):"
-            ls -l ./result/bin || echo "Directory ./result/bin not found or empty."
-            echo "--- Cross build (target/${{ matrix.target }}/release):"
-            ls -l target/${{ matrix.target }}/release || echo "Directory target/${{ matrix.target }}/release not found or empty."
+            echo "Listing contents of $TARGET_DIR:"
+            if [[ -d "$TARGET_DIR" ]]; then
+              ls -l "$TARGET_DIR"
+            else
+              echo "Target directory $TARGET_DIR does not exist."
+              echo "Listing contents of ./target directory:"
+              ls -l ./target || echo "Could not list ./target"
+            fi
             exit 1
           fi
 
-          # Create a temporary directory for consistent artifact upload
-          mkdir -p ./artifacts_temp
-          RENAMED_PATH="./artifacts_temp/$ASSET_NAME"
-          # Move the binary to the temp dir with the final asset name
-          mv "$BINARY_PATH" "$RENAMED_PATH"
-          echo "Moved/Renamed binary to $RENAMED_PATH"
+          # Rename binary to the desired asset name
+          mv "$BINARY_PATH" "$TARGET_DIR/$ASSET_NAME"
+          echo "Renamed binary to $TARGET_DIR/$ASSET_NAME"
 
-          echo "asset_path=$RENAMED_PATH" >> $GITHUB_OUTPUT
+          echo "asset_path=$TARGET_DIR/$ASSET_NAME" >> $GITHUB_OUTPUT
           echo "asset_name=$ASSET_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.artifact_details.outputs.asset_name }} # Use asset name for artifact name
+          name: ${{ steps.artifact_details.outputs.asset_name }}
           path: ${{ steps.artifact_details.outputs.asset_path }}
-          if-no-files-found: error # Error if the artifact isn't found
+          if-no-files-found: error
 
   release:
     name: Create GitHub Release
@@ -155,7 +137,6 @@ jobs:
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
-          # Use the input version for manual triggers, otherwise use the tag ref
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
           name: Release ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
           body: |
