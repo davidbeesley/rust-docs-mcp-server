@@ -22,4 +22,6 @@ pub enum ServerError {
     Tiktoken(String),
     #[error("XDG Directory Error: {0}")]
     Xdg(String),
+    #[error("MCP Runtime Error: {0}")]
+    McpRuntime(String),
 }

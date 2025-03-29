@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rmcp = { version = "0.1.5", features = ["tower", "transport-io", "transport-sse-server"] }
+rmcp = { version = "0.1.5", features = ["tower", "transport-io", "transport-sse-server", "macros", "server"] } # Add macros, server, schemars
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 dotenvy = "0.15"
 serde = { version = "1", features = ["derive"] }
@@ -14,7 +14,7 @@ walkdir = "2.5.0"
 scraper = "0.23.1"
 ndarray = { version = "0.16.1", features = ["serde"] } # Enable serde feature
 async-openai = "0.28.0"
-async-trait = "0.1.88"
+# async-trait = "0.1.88" # Removed, likely no longer needed
 futures = "0.3"
 bincode = { version = "2.0.1", features = ["serde"] } # Enable serde integration
 tiktoken-rs = "0.6.0"
@@ -22,3 +22,4 @@ cargo = "0.86.0"
 tempfile = "3.19.1"
 xdg = { version = "2.5.2", features = ["serde"] }
 anyhow = "1.0.97"
+schemars = "0.8.22"

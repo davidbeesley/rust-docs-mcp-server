@@ -16,12 +16,14 @@ pub static OPENAI_CLIENT: OnceLock<OpenAIClient<OpenAIConfig>> = OnceLock::new()
 use bincode::{Encode, Decode};
 use serde::{Serialize, Deserialize};
 
-// Define a struct suitable for serialization with bincode
-#[derive(Serialize, Deserialize, Debug, Encode, Decode)] // Add Encode, Decode
-pub struct SerializableEmbedding {
+// Define a struct containing path, content, and embedding for caching
+#[derive(Serialize, Deserialize, Debug, Encode, Decode)]
+pub struct CachedDocumentEmbedding {
     pub path: String,
+    pub content: String, // Add the extracted document content
     pub vector: Vec<f32>,
 }
+
 
 /// Calculates the cosine similarity between two vectors.
 pub fn cosine_similarity(v1: ArrayView1<f32>, v2: ArrayView1<f32>) -> f32 {
@@ -42,7 +44,7 @@ pub async fn generate_embeddings(
     documents: &[Document],
     model: &str,
 ) -> Result<(Vec<(String, Array1<f32>)>, usize), ServerError> { // Return tuple: (embeddings, total_tokens)
-    // println!("Generating embeddings for {} documents...", documents.len());
+    // eprintln!("Generating embeddings for {} documents...", documents.len());
 
     // Get the tokenizer for the model and wrap in Arc
     let bpe = Arc::new(cl100k_base().map_err(|e| ServerError::Tiktoken(e.to_string()))?);
@@ -63,7 +65,7 @@ pub async fn generate_embeddings(
                 let token_count = bpe.encode_with_special_tokens(&doc.content).len();
 
                 if token_count > TOKEN_LIMIT {
-                    // println!(
+                    // eprintln!(
                     //     "    Skipping document {}: Actual tokens ({}) exceed limit ({}). Path: {}",
                     //     index + 1,
                     //     token_count,
@@ -82,14 +84,14 @@ pub async fn generate_embeddings(
                     .input(inputs)
                     .build()?; // Propagates OpenAIError
 
-                // println!(
+                // eprintln!(
                 //     "    Sending request for document {} ({} tokens)... Path: {}",
                 //     index + 1,
                 //     token_count, // Use correct variable name
                 //     doc.path
                 // );
                 let response = client.embeddings().create(request).await?; // Propagates OpenAIError
-                // println!("    Received response for document {}.", index + 1);
+                // eprintln!("    Received response for document {}.", index + 1);
 
                 if response.data.len() != 1 {
                     return Err(ServerError::OpenAI(
@@ -129,13 +131,13 @@ pub async fn generate_embeddings(
             Err(e) => {
                 // Log error but potentially continue? Or return the first error?
                 // For now, let's return the first error encountered.
-                println!("Error during concurrent embedding generation: {}", e);
+                eprintln!("Error during concurrent embedding generation: {}", e);
                 return Err(e);
             }
         }
     }
 
-    println!(
+    eprintln!(
         "Finished generating embeddings. Successfully processed {} documents ({} tokens).",
         embeddings_vec.len(), total_processed_tokens
     );
