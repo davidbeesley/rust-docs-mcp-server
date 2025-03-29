@@ -72,7 +72,7 @@ jobs:
         if: matrix.use_nix == true
         # Run the cargo build command within the Nix development shell
         # This ensures all dependencies from flake.nix (like openssl) are available
-        run: nix develop .#rust-dev --command cargo build --release --target ${{ matrix.target }} --verbose
+        run: nix develop .#default --command cargo build --release --target ${{ matrix.target }} --verbose
 
       - name: Build binary (Windows Native)
         if: matrix.use_nix == false
