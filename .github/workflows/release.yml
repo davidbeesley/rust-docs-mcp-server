@@ -56,24 +56,9 @@ jobs:
         with:
           key: ${{ matrix.platform.target }} # Use target in cache key
 
-      # --- Install Dependencies ---
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config
-
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install openssl@3 pkg-config
-          # Set env vars for openssl-sys build script
-          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> $GITHUB_ENV
-
       # --- Build Binary ---
       - name: Build binary using actions-rust-cross
-        uses: houseabsolute/actions-rust-cross@v0 # Using v0 as in your example
+        uses: houseabsolute/actions-rust-cross@v1 # Using latest version
         with:
           # command: build # Default is build
           target: ${{ matrix.platform.target }}

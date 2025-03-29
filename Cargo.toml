@@ -18,7 +18,8 @@ async-openai = "0.28.0"
 futures = "0.3"
 bincode = { version = "2.0.1", features = ["serde"] } # Enable serde integration
 tiktoken-rs = "0.6.0"
-cargo = "0.86.0"
+# Configure cargo crate to vendor openssl to avoid system mismatches
+cargo = { version = "0.86.0", default-features = false, features = ["vendored-openssl"] }
 tempfile = "3.19.1"
 xdg = { version = "2.5.2", features = ["serde"] }
 anyhow = "1.0.97"
