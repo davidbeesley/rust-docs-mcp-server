@@ -8,6 +8,9 @@ pub enum ServerError {
     MissingEnvVar(String),
     #[error("Missing command line argument: {0}")]
     MissingArgument(String),
+    #[error("Configuration Error: {0}")]
+    Config(String),
+
     #[error("MCP Service Error: {0}")]
     Mcp(#[from] ServiceError), // Use ServiceError
     #[error("IO Error: {0}")]

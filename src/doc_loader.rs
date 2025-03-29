@@ -37,8 +37,8 @@ pub struct Document {
 /// Generates documentation for a given crate in a temporary directory,
 /// then loads and parses the HTML documents.
 /// Extracts text content from the main content area of rustdoc generated HTML.
-pub fn load_documents(crate_name: &str, crate_version: &str) -> Result<Vec<Document>, DocLoaderError> { // Use crate_version
-    eprintln!("[DEBUG] load_documents called with crate_name: '{}', crate_version: '{}'", crate_name, crate_version);
+pub fn load_documents(crate_name: &str, crate_version_req: &str) -> Result<Vec<Document>, DocLoaderError> { // Use crate_version_req
+    eprintln!("[DEBUG] load_documents called with crate_name: '{}', crate_version_req: '{}'", crate_name, crate_version_req); // Update log
     let mut documents = Vec::new();
 
     let temp_dir = tempdir().map_err(DocLoaderError::TempDirCreationFailed)?;
@@ -46,13 +46,13 @@ pub fn load_documents(crate_name: &str, crate_version: &str) -> Result<Vec<Docum
     let temp_manifest_path = temp_dir_path.join("Cargo.toml");
 
     eprintln!(
-        "Generating documentation for crate '{}' version '{}' in temporary directory: {}",
+        "Generating documentation for crate '{}' (Version Req: '{}') in temporary directory: {}", // Update log message
         crate_name,
-        crate_version,
+        crate_version_req,
         temp_dir_path.display()
     );
 
-    // Create a temporary Cargo.toml
+    // Create a temporary Cargo.toml using the version requirement
     let cargo_toml_content = format!(
         r#"[package]
 name = "temp-doc-crate"
@@ -64,7 +64,7 @@ edition = "2021"
 [dependencies]
 {} = "{}"
 "#,
-        crate_name, crate_version
+        crate_name, crate_version_req // Use the version requirement string here
     );
 
     // Create the src directory and an empty lib.rs file
