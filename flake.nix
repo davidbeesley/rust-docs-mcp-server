@@ -91,11 +91,14 @@
               ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.attrValues config.env-hooks)}
 
               # Export paths for openssl-sys build script
-              export OPENSSL_DIR="${pkgs.openssl.dev}"
-              export OPENSSL_LIB_DIR="${pkgs.openssl.dev}/lib"
+              export OPENSSL_DIR="${pkgs.openssl.out}"
+              export OPENSSL_LIB_DIR="${pkgs.openssl.out}/lib"
               export OPENSSL_INCLUDE_DIR="${pkgs.openssl.dev}/include"
               # Ensure pkg-config can find the openssl .pc file
               export PKG_CONFIG_PATH="${pkgs.openssl.dev}/lib/pkgconfig:${pkgs.pkg-config}/lib/pkgconfig:$PKG_CONFIG_PATH"
+              # Debug: List contents of OpenSSL lib directory to verify
+              echo "OpenSSL lib directory contents:"
+              ls -la ${pkgs.openssl.out}/lib || echo "Failed to list OpenSSL lib directory"
               echo ">>> OpenSSL environment variables set by shellHook <<<"
             '';
           };
