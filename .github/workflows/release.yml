@@ -12,7 +12,7 @@ on:
         type: string
 
 permissions:
-  contents: write # Needed for softprops/action-gh-release to create releases and upload assets
+  contents: write # Needed for softprops/action-gh-release
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,78 +20,74 @@ env:
 
 jobs:
   build_assets:
-    name: Build Asset (${{ matrix.target }})
+    name: Build Asset (${{ matrix.platform.target }})
     strategy:
       matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest # Use Linux runner for Nix
-            asset_name_suffix: linux-x86_64
-            binary_name_suffix: ""
-            use_nix: true
-          - target: x86_64-apple-darwin
-            os: macos-latest # Use macOS runner for Nix
-            asset_name_suffix: macos-x86_64
-            binary_name_suffix: ""
-            use_nix: true
-          - target: aarch64-apple-darwin
-            os: macos-latest # Use macOS runner for Nix
-            asset_name_suffix: macos-aarch64
-            binary_name_suffix: ""
-            use_nix: true
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest # Windows runner, build natively
-            asset_name_suffix: windows-x86_64.exe
-            binary_name_suffix: ".exe"
-            use_nix: false
+        platform:
+          - release_for: Linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: rustdocs_mcp_server
+            asset_suffix: linux-x86_64
+          - release_for: macOS-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            bin: rustdocs_mcp_server
+            asset_suffix: macos-x86_64
+          - release_for: macOS-aarch64
+            os: macos-latest # Build arm on x86 runner
+            target: aarch64-apple-darwin
+            bin: rustdocs_mcp_server
+            asset_suffix: macos-aarch64
+          - release_for: Windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: rustdocs_mcp_server.exe
+            asset_suffix: windows-x86_64.exe
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.platform.os }}
     steps:
-      - name: Checkout code
+      - name: Check out repo
         uses: actions/checkout@v4
+        # Removed specific repo/branch/token - assumes checkout from current repo
 
-      # --- Nix Setup (Linux/macOS) ---
-      - name: Install Nix
-        if: matrix.use_nix == true
-        uses: cachix/install-nix-action@v31
+      - name: Cache cargo & target directories
+        uses: Swatinem/rust-cache@v2
         with:
-          # Use GitHub token to avoid rate limiting when fetching flakes
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-          # extra_nix_config: |
-          #   experimental-features = nix-command flakes
+          key: ${{ matrix.platform.target }} # Use target in cache key
 
-      # --- Native Rust Setup (Windows) ---
-      - name: Set up Rust toolchain (Windows only)
-        if: matrix.use_nix == false
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      # --- Build Step ---
-      - name: Build binary (Nix)
-        if: matrix.use_nix == true
-        # Run the cargo build command within the Nix development shell
-        # This ensures all dependencies from flake.nix (like openssl) are available
+      # --- Install Dependencies ---
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
-          nix develop .#default --command bash -c ' \
-            echo "Adding target ${{ matrix.target }} with rustup..." && \
-            rustup target add ${{ matrix.target }} && \
-            echo "Building for target ${{ matrix.target }}..." && \
-            cargo build --release --target ${{ matrix.target }} --verbose \
-          '
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
 
-      - name: Build binary
-        if: matrix.use_nix == false
-        run: cargo build --release --target ${{ matrix.target }} --verbose
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3 pkg-config
+          # Set env vars for openssl-sys build script
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> $GITHUB_ENV
 
-      # --- Artifact Handling ---
+      # --- Build Binary ---
+      - name: Build binary using actions-rust-cross
+        uses: houseabsolute/actions-rust-cross@v0 # Using v0 as in your example
+        with:
+          # command: build # Default is build
+          target: ${{ matrix.platform.target }}
+          args: "--release --verbose" # Removed --locked unless you need it
+          strip: true # Keep stripping enabled as in your example
+
+      # --- Prepare Artifact ---
       - name: Determine Artifact Path and Name
         id: artifact_details
         shell: bash
         run: |
-          BINARY_NAME="${{ env.CRATE_NAME }}${{ matrix.binary_name_suffix }}"
-          ASSET_NAME="${{ env.CRATE_NAME }}-${{ matrix.asset_name_suffix }}"
-          TARGET_DIR="target/${{ matrix.target }}/release"
+          BINARY_NAME="${{ matrix.platform.bin }}"
+          ASSET_NAME="${{ env.CRATE_NAME }}-${{ matrix.platform.asset_suffix }}"
+          TARGET_DIR="target/${{ matrix.platform.target }}/release"
           BINARY_PATH="$TARGET_DIR/$BINARY_NAME"
 
           echo "Calculated binary path: $BINARY_PATH"
@@ -100,13 +96,7 @@ jobs:
           if [[ ! -f "$BINARY_PATH" ]]; then
             echo "Error: Binary not found at $BINARY_PATH"
             echo "Listing contents of $TARGET_DIR:"
-            if [[ -d "$TARGET_DIR" ]]; then
-              ls -l "$TARGET_DIR"
-            else
-              echo "Target directory $TARGET_DIR does not exist."
-              echo "Listing contents of ./target directory:"
-              ls -l ./target || echo "Could not list ./target"
-            fi
+            ls -l "$TARGET_DIR" || echo "Could not list $TARGET_DIR"
             exit 1
           fi
 
@@ -132,7 +122,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts # Download all artifacts to a directory named 'artifacts'
+          path: artifacts
 
       - name: List downloaded artifacts for debugging
         run: |
