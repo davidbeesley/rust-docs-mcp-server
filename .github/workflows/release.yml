@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*' # Trigger on version tags like v1.0.0
+  workflow_dispatch: # Allows manual triggering
+
+permissions:
+  contents: write # Needed to create releases and upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+  CRATE_NAME: rustdocs_mcp_server
+
+jobs:
+  create_release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          body: |
+            Automated release for ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+
+  build_release:
+    name: Build Release Assets
+    needs: create_release
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            asset_name_suffix: linux-x86_64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            asset_name_suffix: macos-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-latest # Can build aarch64 on x86_64 macOS runners
+            asset_name_suffix: macos-aarch64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            asset_name_suffix: windows-x86_64.exe # Add .exe for Windows
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }} # Ensure the target is installed for the host
+
+      - name: Install cross-rs
+        if: runner.os != 'Windows' # cross doesn't work on Windows runners directly for MSVC target
+        run: cargo install cross --git https://github.com/cross-rs/cross --rev 1131999 # Use specific rev for stability
+
+      - name: Build binary (cross)
+        if: runner.os != 'Windows'
+        run: cross build --release --target ${{ matrix.target }} --verbose
+        env:
+          # Set linker for Linux MUSL if needed, otherwise default GNU is fine
+          # For macOS, default linker works
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: gcc
+          # Add other specific env vars if needed for cross-compilation
+
+      - name: Build binary (native Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Determine Artifact Path and Name
+        id: artifact_details
+        shell: bash
+        run: |
+          BINARY_NAME="${{ env.CRATE_NAME }}"
+          ASSET_SUFFIX="${{ matrix.asset_name_suffix }}"
+          TARGET_DIR="target/${{ matrix.target }}/release"
+
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            BINARY_PATH="$TARGET_DIR/$BINARY_NAME.exe"
+            ASSET_NAME="$BINARY_NAME-$ASSET_SUFFIX" # Suffix already includes .exe
+          else
+            BINARY_PATH="$TARGET_DIR/$BINARY_NAME"
+            ASSET_NAME="$BINARY_NAME-$ASSET_SUFFIX"
+          fi
+
+          echo "Calculated binary path: $BINARY_PATH"
+          echo "Calculated asset name: $ASSET_NAME"
+
+          # Check if the binary exists
+          if [[ ! -f "$BINARY_PATH" ]]; then
+            echo "Error: Binary not found at $BINARY_PATH"
+            # List directory contents for debugging
+            echo "Listing contents of $TARGET_DIR:"
+            ls -l "$TARGET_DIR"
+            exit 1
+          fi
+
+          echo "binary_path=$BINARY_PATH" >> $GITHUB_OUTPUT
+          echo "asset_name=$ASSET_NAME" >> $GITHUB_OUTPUT
+
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create_release.outputs.upload_url }}
+          asset_path: ${{ steps.artifact_details.outputs.binary_path }}
+          asset_name: ${{ steps.artifact_details.outputs.asset_name }}
+          asset_content_type: application/octet-stream
