@@ -3,6 +3,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 
+⭐ **Like this project? Please [star the repository](https://github.com/Govcraft/rust-docs-mcp-server) on GitHub to show your support and stay updated!** ⭐
+
 ## Motivation
 
 Modern AI-powered coding assistants (like Cursor, Cline, Roo Code, etc.) excel at understanding code structure and syntax but often struggle with the specifics of rapidly evolving libraries and frameworks, especially in ecosystems like Rust where crates are updated frequently. Their training data cutoff means they may lack knowledge of the latest APIs, leading to incorrect or outdated code suggestions.

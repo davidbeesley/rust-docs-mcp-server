@@ -27,6 +27,7 @@ use std::{
     io::BufReader,
     path::PathBuf,
 };
+#[cfg(not(target_os = "windows"))]
 use xdg::BaseDirectories;
 
 // No changes needed below this line until server initialization/running
@@ -69,19 +70,35 @@ async fn main() -> Result<(), ServerError> {
     eprintln!("Target Spec: {}, Parsed Name: {}, Version Req: {}", specid_str, crate_name, crate_version_req); // Use eprintln
 
     // --- Determine Paths ---
-    let xdg_dirs = BaseDirectories::with_prefix("rustdocs-mcp-server")
-        .map_err(|e| ServerError::Xdg(format!("Failed to get XDG directories: {}", e)))?;
 
-    // Sanitize the version requirement string for use in the path
+    // Sanitize the version requirement string for use in the path (needed for both paths)
     let sanitized_version_req = crate_version_req.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-', "_");
 
-    // Construct the path for embeddings file, including the sanitized version requirement
+    // Construct the relative path component (needed for both paths)
     let embeddings_relative_path = PathBuf::from(&crate_name)
         .join(&sanitized_version_req) // Add sanitized version req as a directory
         .join("embeddings.bin");
-    let embeddings_file_path = xdg_dirs
-        .place_data_file(embeddings_relative_path)
-        .map_err(ServerError::Io)?;
+
+    #[cfg(not(target_os = "windows"))]
+    let embeddings_file_path = {
+        let xdg_dirs = BaseDirectories::with_prefix("rustdocs-mcp-server")
+            .map_err(|e| ServerError::Xdg(format!("Failed to get XDG directories: {}", e)))?;
+        xdg_dirs
+            .place_data_file(embeddings_relative_path)
+            .map_err(ServerError::Io)?
+    };
+
+    #[cfg(target_os = "windows")]
+    let embeddings_file_path = {
+        let cache_dir = dirs::cache_dir().ok_or_else(|| {
+            ServerError::Config("Could not determine cache directory on Windows".to_string())
+        })?;
+        let app_cache_dir = cache_dir.join("rustdocs-mcp-server");
+        // Ensure the base app cache directory exists
+        fs::create_dir_all(&app_cache_dir).map_err(ServerError::Io)?;
+        app_cache_dir.join(embeddings_relative_path)
+    };
+
 
     eprintln!("Cache file path: {:?}", embeddings_file_path); // Use eprintln
 
