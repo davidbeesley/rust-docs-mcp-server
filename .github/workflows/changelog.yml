@@ -8,10 +8,6 @@ jobs:
   generate:
     runs-on: "ubuntu-latest"
     steps:
-      - name: Install gitchglog
-        run: |
-          wget https://github.com/git-chglog/git-chglog/releases/download/v0.15.4/git-chglog_0.15.4_linux_amd64.tar.gz
-          tar -xvzf git-chglog_0.15.4_linux_amd64.tar.gz
       - name: Check out repo
         uses: actions/checkout@v4
         with:
@@ -19,13 +15,11 @@ jobs:
           fetch-depth: 0
           repository: "Govcraft/rust-docs-mcp-server"
           ref: ${{ github.head_ref }}
-      - name: Generate changelog
-        run: |
-         git switch -c changelog-update 
-         ./git-chglog -o CHANGELOG.md
-
-      - name: Check in CHANGELOG
-        run: |
+      - run: |
+          wget https://github.com/git-chglog/git-chglog/releases/download/v0.15.4/git-chglog_0.15.4_linux_amd64.tar.gz
+          tar -xvzf git-chglog_0.15.4_linux_amd64.tar.gz
+          git switch -c changelog-update 
+          ./git-chglog -o CHANGELOG.md
           # merge the changelog-update branch into the main branch
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
