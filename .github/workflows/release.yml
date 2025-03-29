@@ -49,7 +49,6 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
-        # Removed specific repo/branch/token - assumes checkout from current repo
 
       - name: Cache cargo & target directories
         uses: Swatinem/rust-cache@v2
@@ -60,13 +59,27 @@ jobs:
       - name: Build binary using actions-rust-cross
         uses: houseabsolute/actions-rust-cross@v1 # Using latest version
         with:
-          # command: build # Default is build
           target: ${{ matrix.platform.target }}
-          args: "--release --verbose" # Removed --locked unless you need it
-          strip: true # Keep stripping enabled as in your example
+          args: "--release --verbose"
+          strip: true # Stripping is done by the action
 
-      # --- Prepare Artifact ---
-      - name: Determine Artifact Path and Name
+      # --- Install UPX ---
+      - name: Install UPX (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl
+
+      - name: Install UPX (macOS)
+        if: runner.os == 'macOS'
+        run: brew install upx
+
+      - name: Install UPX (Windows)
+        if: runner.os == 'Windows'
+        run: choco install upx --no-progress --yes
+
+      # --- Prepare Artifact (includes UPX compression) ---
+      - name: Prepare Artifact and Compress with UPX
         id: artifact_details
         shell: bash
         run: |
@@ -85,9 +98,13 @@ jobs:
             exit 1
           fi
 
-          # Rename binary to the desired asset name
+          # Compress the binary with UPX
+          echo "Compressing binary with UPX..."
+          upx --best --lzma "$BINARY_PATH"
+
+          # Rename binary to the desired asset name AFTER compression
           mv "$BINARY_PATH" "$TARGET_DIR/$ASSET_NAME"
-          echo "Renamed binary to $TARGET_DIR/$ASSET_NAME"
+          echo "Renamed compressed binary to $TARGET_DIR/$ASSET_NAME"
 
           echo "asset_path=$TARGET_DIR/$ASSET_NAME" >> $GITHUB_OUTPUT
           echo "asset_name=$ASSET_NAME" >> $GITHUB_OUTPUT

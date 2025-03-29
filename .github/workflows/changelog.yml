@@ -1,0 +1,34 @@
+name: ChangeLog generation
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+jobs:
+  generate:
+    runs-on: "ubuntu-latest"
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+          repository: "Govcraft/rust-docs-mcp-server"
+          token: ${{ secrets.PAT }}
+
+      - name: Install gitchglog
+        run: |
+          wget https://github.com/git-chglog/git-chglog/releases/download/v0.15.4/git-chglog_0.15.4_linux_amd64.tar.gz
+          tar -xvzf git-chglog_0.15.4_linux_amd64.tar.gz
+
+      - name: Generate changelog
+        run: ./git-chglog -o CHANGELOG.md
+      - name: Check in CHANGELOG
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: './CHANGELOG.md'
+          author_name: 'Roland'
+          author_email: 'roland@govcraft.ai'
+          message: 'chore(docs): update CHANGELOG for latest tag'
