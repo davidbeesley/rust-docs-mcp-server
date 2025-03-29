@@ -58,6 +58,19 @@ jobs:
           strip: false # Set to true if you want to strip binaries where possible (not cross-compiled ones)
           # cross-version: latest # Default is latest release, usually fine
           # use-rust-cache: true # Default is true, uses Swatinem/rust-cache
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3 pkg-config
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> $GITHUB_ENV
+
 
       - name: Determine Artifact Path and Name
         id: artifact_details
