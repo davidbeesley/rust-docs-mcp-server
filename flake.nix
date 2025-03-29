@@ -86,7 +86,18 @@
           # Create the combined shell
           devShells.default = pkgs.mkShell {
             buildInputs = nixpkgs.lib.flatten (nixpkgs.lib.attrValues config.env-packages ++ [ ]);
-            shellHook = nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.attrValues config.env-hooks);
+            # Combine existing hooks with new exports for OpenSSL
+            shellHook = ''
+              ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.attrValues config.env-hooks)}
+
+              # Export paths for openssl-sys build script
+              export OPENSSL_DIR="${pkgs.openssl.dev}"
+              export OPENSSL_LIB_DIR="${pkgs.openssl.dev}/lib"
+              export OPENSSL_INCLUDE_DIR="${pkgs.openssl.dev}/include"
+              # Ensure pkg-config can find the openssl .pc file
+              export PKG_CONFIG_PATH="${pkgs.openssl.dev}/lib/pkgconfig:${pkgs.pkg-config}/lib/pkgconfig:$PKG_CONFIG_PATH"
+              echo ">>> OpenSSL environment variables set by shellHook <<<"
+            '';
           };
         };
     };
