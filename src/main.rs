@@ -13,45 +13,62 @@ use crate::{
 };
 use async_openai::Client as OpenAIClient;
 use bincode::config;
+use cargo::core::PackageIdSpec;
+use clap::Parser; // Import clap Parser
 use ndarray::Array1;
 // Import rmcp items needed for the new approach
-use cargo::core::PackageIdSpec;
-
 use rmcp::{
     transport::io::stdio, // Use the standard stdio transport
     ServiceExt,           // Import the ServiceExt trait for .serve() and .waiting()
 };
 use std::{
+    collections::hash_map::DefaultHasher,
     env,
     fs::{self, File},
+    hash::{Hash, Hasher}, // Import hashing utilities
     io::BufReader,
     path::PathBuf,
 };
 #[cfg(not(target_os = "windows"))]
 use xdg::BaseDirectories;
 
-// No changes needed below this line until server initialization/running
+// --- CLI Argument Parsing ---
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// The package ID specification (e.g., "serde@^1.0", "tokio").
+    #[arg()] // Positional argument
+    package_spec: String,
+
+    /// Optional features to enable for the crate when generating documentation.
+    #[arg(short = 'F', long, value_delimiter = ',', num_args = 0..)] // Allow multiple comma-separated values
+    features: Option<Vec<String>>,
+}
+
+// Helper function to create a stable hash from features
+fn hash_features(features: &Option<Vec<String>>) -> String {
+    features
+        .as_ref()
+        .map(|f| {
+            let mut sorted_features = f.clone();
+            sorted_features.sort_unstable(); // Sort for consistent hashing
+            let mut hasher = DefaultHasher::new();
+            sorted_features.hash(&mut hasher);
+            format!("{:x}", hasher.finish()) // Return hex representation of hash
+        })
+        .unwrap_or_else(|| "no_features".to_string()) // Use a specific string if no features
+}
 
 #[tokio::main]
 async fn main() -> Result<(), ServerError> {
     // Load .env file if present
     dotenvy::dotenv().ok();
 
-    // Initialize tracing (optional, but good practice)
-    // Consider adding tracing_subscriber setup here if not already present elsewhere
-    // Example:
-    // tracing_subscriber::fmt()
-    //     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-    //     .init();
-    // eprintln!("Tracing initialized."); // Use eprintln for startup messages
-
-    // Get Package ID Spec from command line argument
-    let mut args = env::args().skip(1); // Skip program name
-    let specid_str = args.next().ok_or_else(|| {
-        eprintln!("Usage: rustdocs_mcp_server <PACKAGE_ID_SPEC>");
-        eprintln!("Example: rustdocs_mcp_server \"serde@^1.0\"");
-        ServerError::MissingArgument("PACKAGE_ID_SPEC".to_string())
-    })?;
+    // --- Parse CLI Arguments ---
+    let cli = Cli::parse();
+    let specid_str = cli.package_spec;
+    let features = cli.features; // This is Option<Vec<String>>
 
     // Parse the specid string
     let spec = PackageIdSpec::parse(&specid_str).map_err(|e| {
@@ -62,21 +79,29 @@ async fn main() -> Result<(), ServerError> {
     })?;
 
     let crate_name = spec.name().to_string();
-    // Use '*' as default version requirement if not specified in the spec
-    // Corrected method name: version() instead of version_req()
-    let crate_version_req = spec.version().map(|v| v.to_string()).unwrap_or_else(|| "*".to_string());
+    let crate_version_req = spec
+        .version()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "*".to_string());
 
+    eprintln!(
+        "Target Spec: {}, Parsed Name: {}, Version Req: {}, Features: {:?}",
+        specid_str, crate_name, crate_version_req, features
+    );
 
-    eprintln!("Target Spec: {}, Parsed Name: {}, Version Req: {}", specid_str, crate_name, crate_version_req); // Use eprintln
+    // --- Determine Paths (incorporating features) ---
 
-    // --- Determine Paths ---
+    // Sanitize the version requirement string
+    let sanitized_version_req = crate_version_req
+        .replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-', "_");
 
-    // Sanitize the version requirement string for use in the path (needed for both paths)
-    let sanitized_version_req = crate_version_req.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-', "_");
+    // Generate a stable hash for the features to use in the path
+    let features_hash = hash_features(&features);
 
-    // Construct the relative path component (needed for both paths)
+    // Construct the relative path component including features hash
     let embeddings_relative_path = PathBuf::from(&crate_name)
-        .join(&sanitized_version_req) // Add sanitized version req as a directory
+        .join(&sanitized_version_req)
+        .join(&features_hash) // Add features hash as a directory level
         .join("embeddings.bin");
 
     #[cfg(not(target_os = "windows"))]
@@ -99,8 +124,7 @@ async fn main() -> Result<(), ServerError> {
         app_cache_dir.join(embeddings_relative_path)
     };
 
-
-    eprintln!("Cache file path: {:?}", embeddings_file_path); // Use eprintln
+    eprintln!("Cache file path: {:?}", embeddings_file_path);
 
     // --- Try Loading Embeddings and Documents from Cache ---
     let mut loaded_from_cache = false;
@@ -111,7 +135,7 @@ async fn main() -> Result<(), ServerError> {
         eprintln!(
             "Attempting to load cached data from: {:?}",
             embeddings_file_path
-        ); // Use eprintln
+        );
         match File::open(&embeddings_file_path) {
             Ok(file) => {
                 let reader = BufReader::new(file);
@@ -123,7 +147,7 @@ async fn main() -> Result<(), ServerError> {
                         eprintln!(
                             "Successfully loaded {} items from cache. Separating data...",
                             cached_data.len()
-                        ); // Use eprintln
+                        );
                         let mut embeddings = Vec::with_capacity(cached_data.len());
                         let mut documents = Vec::with_capacity(cached_data.len());
                         for item in cached_data {
@@ -138,22 +162,16 @@ async fn main() -> Result<(), ServerError> {
                         loaded_from_cache = true;
                     }
                     Err(e) => {
-                        eprintln!( // Use eprintln
-                            "Failed to decode cache file: {}. Will regenerate.",
-                            e
-                        );
+                        eprintln!("Failed to decode cache file: {}. Will regenerate.", e);
                     }
                 }
             }
             Err(e) => {
-                eprintln!( // Use eprintln
-                    "Failed to open cache file: {}. Will regenerate.",
-                    e
-                );
+                eprintln!("Failed to open cache file: {}. Will regenerate.", e);
             }
         }
     } else {
-        eprintln!("Cache file not found. Will generate."); // Use eprintln
+        eprintln!("Cache file not found. Will generate.");
     }
 
     // --- Generate or Use Loaded Embeddings ---
@@ -169,24 +187,26 @@ async fn main() -> Result<(), ServerError> {
 
     let final_embeddings = match loaded_embeddings {
         Some(embeddings) => {
-            eprintln!("Using embeddings and documents loaded from cache."); // Use eprintln
+            eprintln!("Using embeddings and documents loaded from cache.");
             embeddings
         }
         None => {
-            eprintln!("Proceeding with documentation loading and embedding generation."); // Use eprintln
+            eprintln!("Proceeding with documentation loading and embedding generation.");
 
             let _openai_api_key = env::var("OPENAI_API_KEY")
                 .map_err(|_| ServerError::MissingEnvVar("OPENAI_API_KEY".to_string()))?;
 
-            // Client initialization moved earlier
-
-            eprintln!("Loading documents for crate: {} (Version Req: {})", crate_name, crate_version_req); // Use eprintln
-            // Use crate_name and crate_version_req here
-            let loaded_documents = doc_loader::load_documents(&crate_name, &crate_version_req)?;
-            eprintln!("Loaded {} documents.", loaded_documents.len()); // Use eprintln
+            eprintln!(
+                "Loading documents for crate: {} (Version Req: {}, Features: {:?})",
+                crate_name, crate_version_req, features
+            );
+            // Pass features to load_documents
+            let loaded_documents =
+                doc_loader::load_documents(&crate_name, &crate_version_req, features.as_ref())?; // Pass features here
+            eprintln!("Loaded {} documents.", loaded_documents.len());
             documents_for_server = loaded_documents.clone();
 
-            eprintln!("Generating embeddings..."); // Use eprintln
+            eprintln!("Generating embeddings...");
             let (generated_embeddings, total_tokens) = generate_embeddings(
                 &openai_client,
                 &loaded_documents,
@@ -196,14 +216,14 @@ async fn main() -> Result<(), ServerError> {
 
             let cost_per_million = 0.02;
             let estimated_cost = (total_tokens as f64 / 1_000_000.0) * cost_per_million;
-            eprintln!( // Use eprintln
+            eprintln!(
                 "Embedding generation cost for {} tokens: ${:.6}",
                 total_tokens, estimated_cost
             );
             generated_tokens = Some(total_tokens);
             generation_cost = Some(estimated_cost);
 
-            eprintln!( // Use eprintln
+            eprintln!(
                 "Saving generated documents and embeddings to: {:?}",
                 embeddings_file_path
             );
@@ -220,7 +240,7 @@ async fn main() -> Result<(), ServerError> {
                         vector: embedding_array.to_vec(),
                     });
                 } else {
-                    eprintln!( // Use eprintln
+                    eprintln!(
                         "Warning: Embedding not found for document path: {}. Skipping from cache.",
                         doc.path
                     );
@@ -232,7 +252,7 @@ async fn main() -> Result<(), ServerError> {
                     if let Some(parent_dir) = embeddings_file_path.parent() {
                         if !parent_dir.exists() {
                             if let Err(e) = fs::create_dir_all(parent_dir) {
-                                eprintln!( // Use eprintln
+                                eprintln!(
                                     "Warning: Failed to create cache directory {}: {}",
                                     parent_dir.display(),
                                     e
@@ -241,16 +261,16 @@ async fn main() -> Result<(), ServerError> {
                         }
                     }
                     if let Err(e) = fs::write(&embeddings_file_path, encoded_bytes) {
-                        eprintln!("Warning: Failed to write cache file: {}", e); // Use eprintln
+                        eprintln!("Warning: Failed to write cache file: {}", e);
                     } else {
-                        eprintln!( // Use eprintln
+                        eprintln!(
                             "Cache saved successfully ({} items).",
                             combined_cache_data.len()
                         );
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to encode data for cache: {}", e); // Use eprintln
+                    eprintln!("Warning: Failed to encode data for cache: {}", e);
                 }
             }
             generated_embeddings
@@ -258,22 +278,29 @@ async fn main() -> Result<(), ServerError> {
     };
 
     // --- Initialize and Start Server ---
-    eprintln!("Initializing server for crate: {}", crate_name); // Use eprintln
+    eprintln!(
+        "Initializing server for crate: {} (Version Req: {}, Features: {:?})",
+        crate_name, crate_version_req, features
+    );
+
+    let features_str = features
+        .as_ref()
+        .map(|f| format!(" Features: {:?}", f))
+        .unwrap_or_default();
 
     let startup_message = if loaded_from_cache {
         format!(
-            "Server for crate '{}' (Version Req: '{}') initialized. Loaded {} embeddings from cache.",
-            crate_name,
-            crate_version_req, // Add version req here
-            final_embeddings.len()
+            "Server for crate '{}' (Version Req: '{}'{}) initialized. Loaded {} embeddings from cache.",
+            crate_name, crate_version_req, features_str, final_embeddings.len()
         )
     } else {
         let tokens = generated_tokens.unwrap_or(0);
         let cost = generation_cost.unwrap_or(0.0);
         format!(
-            "Server for crate '{}' (Version Req: '{}') initialized. Generated {} embeddings for {} tokens (Est. Cost: ${:.6}).",
+            "Server for crate '{}' (Version Req: '{}'{}) initialized. Generated {} embeddings for {} tokens (Est. Cost: ${:.6}).",
             crate_name,
-            crate_version_req, // Add version req here
+            crate_version_req,
+            features_str,
             final_embeddings.len(),
             tokens,
             cost
@@ -289,22 +316,22 @@ async fn main() -> Result<(), ServerError> {
     )?;
 
     // --- Use standard stdio transport and ServiceExt ---
-    eprintln!("Rust Docs MCP server starting via stdio..."); // Use eprintln
+    eprintln!("Rust Docs MCP server starting via stdio...");
 
     // Serve the server using the ServiceExt trait and standard stdio transport
     let server_handle = service.serve(stdio()).await.map_err(|e| {
-        eprintln!("Failed to start server: {:?}", e); // Use eprintln
+        eprintln!("Failed to start server: {:?}", e);
         ServerError::McpRuntime(e.to_string()) // Use the new McpRuntime variant
     })?;
 
-    eprintln!("{} Docs MCP server running...", &crate_name); // Use eprintln
+    eprintln!("{} Docs MCP server running...", &crate_name);
 
     // Wait for the server to complete (e.g., stdin closed)
     server_handle.waiting().await.map_err(|e| {
-        eprintln!("Server encountered an error while running: {:?}", e); // Use eprintln
+        eprintln!("Server encountered an error while running: {:?}", e);
         ServerError::McpRuntime(e.to_string()) // Use the new McpRuntime variant
     })?;
 
-    eprintln!("Rust Docs MCP server stopped."); // Use eprintln
+    eprintln!("Rust Docs MCP server stopped.");
     Ok(())
 }

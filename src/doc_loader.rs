@@ -1,5 +1,5 @@
 use scraper::{Html, Selector};
-use std::{fs::{self, File, create_dir_all}, io::Write}; // Added File, create_dir_all, and Write
+use std::{fs::{self, File, create_dir_all}, io::Write, path::PathBuf}; // Added PathBuf
 use cargo::core::resolver::features::CliFeatures;
 // use cargo::core::SourceId; // Removed unused import
 // use cargo::util::Filesystem; // Removed unused import
@@ -25,6 +25,8 @@ pub enum DocLoaderError {
     TempDirCreationFailed(std::io::Error),
     #[error("Cargo library error: {0}")]
     CargoLib(#[from] AnyhowError), // Re-add CargoLib variant
+    #[error("Failed to strip prefix '{prefix}' from path '{path}': {source}")] // Improved error
+    StripPrefix { prefix: PathBuf, path: PathBuf, source: std::path::StripPrefixError },
 }
 
 // Simple struct to hold document content, maybe add path later if needed
@@ -37,8 +39,15 @@ pub struct Document {
 /// Generates documentation for a given crate in a temporary directory,
 /// then loads and parses the HTML documents.
 /// Extracts text content from the main content area of rustdoc generated HTML.
-pub fn load_documents(crate_name: &str, crate_version_req: &str) -> Result<Vec<Document>, DocLoaderError> { // Use crate_version_req
-    eprintln!("[DEBUG] load_documents called with crate_name: '{}', crate_version_req: '{}'", crate_name, crate_version_req); // Update log
+pub fn load_documents(
+    crate_name: &str,
+    crate_version_req: &str,
+    features: Option<&Vec<String>>, // Add optional features parameter
+) -> Result<Vec<Document>, DocLoaderError> {
+    eprintln!(
+        "[DEBUG] load_documents called with crate_name: '{}', crate_version_req: '{}', features: {:?}",
+        crate_name, crate_version_req, features
+    );
     let mut documents = Vec::new();
 
     let temp_dir = tempdir().map_err(DocLoaderError::TempDirCreationFailed)?;
@@ -46,13 +55,22 @@ pub fn load_documents(crate_name: &str, crate_version_req: &str) -> Result<Vec<D
     let temp_manifest_path = temp_dir_path.join("Cargo.toml");
 
     eprintln!(
-        "Generating documentation for crate '{}' (Version Req: '{}') in temporary directory: {}", // Update log message
+        "Generating documentation for crate '{}' (Version Req: '{}', Features: {:?}) in temporary directory: {}",
         crate_name,
         crate_version_req,
+        features, // Log features
         temp_dir_path.display()
     );
 
-    // Create a temporary Cargo.toml using the version requirement
+    // Create a temporary Cargo.toml using the version requirement and features
+    let features_string = features
+        .filter(|f| !f.is_empty()) // Only add features if provided and not empty
+        .map(|f| {
+            let feature_list = f.iter().map(|feat| format!("\"{}\"", feat)).collect::<Vec<_>>().join(", ");
+            format!(", features = [{}]", feature_list)
+        })
+        .unwrap_or_default(); // Use empty string if no features
+
     let cargo_toml_content = format!(
         r#"[package]
 name = "temp-doc-crate"
@@ -62,9 +80,9 @@ edition = "2021"
 [lib] # Add an empty lib target to satisfy Cargo
 
 [dependencies]
-{} = "{}"
+{} = {{ version = "{}"{} }}
 "#,
-        crate_name, crate_version_req // Use the version requirement string here
+        crate_name, crate_version_req, features_string // Use the version requirement string and features string here
     );
 
     // Create the src directory and an empty lib.rs file
@@ -76,14 +94,15 @@ edition = "2021"
     let mut temp_manifest_file = File::create(&temp_manifest_path)?;
     temp_manifest_file.write_all(cargo_toml_content.as_bytes())?;
     eprintln!("[DEBUG] Created temporary manifest at: {}", temp_manifest_path.display());
+    eprintln!("[DEBUG] Temporary Manifest Content:\n{}", cargo_toml_content); // Log content
 
 
     // --- Use Cargo API ---
     let mut config = GlobalContext::default()?; // Make mutable
-    // Configure context for quiet operation
+    // Configure context (set quiet to false for more detailed errors)
     config.configure(
         0,     // verbose
-        true,  // quiet
+        true, // quiet
         None,  // color
         false, // frozen
         false, // locked
@@ -105,7 +124,7 @@ edition = "2021"
     let mut compile_opts = CompileOptions::new(&config, cargo::core::compiler::CompileMode::Doc { deps: false, json: false })?;
     // Specify the package explicitly
     let package_spec = crate_name.to_string(); // Just use name (with underscores)
-    compile_opts.cli_features = CliFeatures::new_all(false); // Use new_all(false)
+    compile_opts.cli_features = CliFeatures::new_all(false); // Use new_all(false) - applies to the temp crate, not dependency
     compile_opts.spec = Packages::Packages(vec![package_spec.clone()]); // Clone spec
 
     // Create DocOptions: Pass compile options
@@ -116,27 +135,64 @@ edition = "2021"
     };
     eprintln!("[DEBUG] package_spec for CompileOptions: '{}'", package_spec);
 
-    ops::doc(&ws, &doc_opts).map_err(DocLoaderError::CargoLib)?; // Use ws
-    // --- End Cargo API ---
-    // Construct the path to the generated documentation within the temp directory
-    // Cargo uses underscores in the directory path if the crate name has hyphens
-    let crate_name_underscores = crate_name.replace('-', "_");
-    let docs_path = temp_dir_path.join("doc").join(&crate_name_underscores);
-
     // Debug print relevant options before calling ops::doc
     eprintln!("[DEBUG] CompileOptions spec: {:?}", doc_opts.compile_opts.spec);
-    eprintln!("[DEBUG] CompileOptions cli_features: {:?}", doc_opts.compile_opts.cli_features);
+    eprintln!("[DEBUG] CompileOptions cli_features: {:?}", doc_opts.compile_opts.cli_features); // Features for temp crate
     eprintln!("[DEBUG] CompileOptions build_config mode: {:?}", doc_opts.compile_opts.build_config.mode);
     eprintln!("[DEBUG] DocOptions output_format: {:?}", doc_opts.output_format);
-    if !docs_path.exists() || !docs_path.is_dir() {
-         return Err(DocLoaderError::CargoLib(anyhow::anyhow!(
-             "Generated documentation not found at expected path: {}. Check crate name and cargo doc output.",
-             docs_path.display()
-         )));
-    }
-    eprintln!("Generated documentation path: {}", docs_path.display());
 
-    eprintln!("[DEBUG] ops::doc called successfully.");
+    ops::doc(&ws, &doc_opts).map_err(DocLoaderError::CargoLib)?; // Use ws
+    // --- End Cargo API ---
+
+    // --- Find the actual documentation directory ---
+    // Iterate through subdirectories in `target/doc` and find the one containing `index.html`.
+    let base_doc_path = temp_dir_path.join("doc");
+    eprintln!("[DEBUG] Base doc path: {}", base_doc_path.display());
+
+    let mut target_docs_path: Option<PathBuf> = None;
+    let mut found_count = 0;
+
+    if base_doc_path.is_dir() {
+        for entry_result in fs::read_dir(&base_doc_path)? {
+            let entry = entry_result?;
+            eprintln!("[DEBUG] Checking directory entry: {}", entry.path().display()); // Log entry being checked
+            if entry.file_type()?.is_dir() {
+                let dir_path = entry.path();
+                let index_html_path = dir_path.join("index.html");
+                if index_html_path.is_file() {
+                    eprintln!("[DEBUG] Found potential docs directory with index.html: {}", dir_path.display());
+                    if target_docs_path.is_none() {
+                        target_docs_path = Some(dir_path);
+                    }
+                    found_count += 1;
+                } else {
+                     eprintln!("[DEBUG] Skipping directory without index.html: {}", dir_path.display());
+                }
+            }
+        }
+    }
+
+    let docs_path = match (found_count, target_docs_path) {
+        (1, Some(path)) => {
+            eprintln!("[DEBUG] Confirmed unique documentation directory: {}", path.display());
+            path
+        },
+        (0, _) => {
+            return Err(DocLoaderError::CargoLib(anyhow::anyhow!(
+                "Could not find any subdirectory containing index.html within '{}'. Cargo doc might have failed or produced unexpected output.",
+                base_doc_path.display()
+            )));
+        },
+        (count, _) => {
+             return Err(DocLoaderError::CargoLib(anyhow::anyhow!(
+                "Expected exactly one subdirectory containing index.html within '{}', but found {}. Cannot determine the correct documentation path.",
+                base_doc_path.display(), count
+            )));
+        }
+    };
+    // --- End finding documentation directory ---
+
+    eprintln!("Using documentation path: {}", docs_path.display()); // Log the path we are actually using
 
     // Define the CSS selector for the main content area in rustdoc HTML
     // This might need adjustment based on the exact rustdoc version/theme
@@ -145,7 +201,6 @@ edition = "2021"
     eprintln!("[DEBUG] Calculated final docs_path: {}", docs_path.display());
 
     eprintln!("Starting document loading from: {}", docs_path.display());
-        eprintln!("[DEBUG] docs_path does not exist or is not a directory.");
 
     for entry in WalkDir::new(&docs_path)
         .into_iter()
@@ -155,11 +210,12 @@ edition = "2021"
         let path = entry.path();
         // Calculate path relative to the docs_path root
         let relative_path = path.strip_prefix(&docs_path).map_err(|e| {
-            // Provide more context in the error message
-            DocLoaderError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to strip prefix '{}' from path '{}': {}", docs_path.display(), path.display(), e)
-            ))
+            // Provide more context in the error message using the new error variant
+            DocLoaderError::StripPrefix {
+                prefix: docs_path.to_path_buf(),
+                path: path.to_path_buf(),
+                source: e,
+            }
         })?;
         let path_str = relative_path.to_string_lossy().to_string(); // Use the relative path
         // eprintln!("Processing file: {} (relative: {})", path.display(), path_str); // Updated debug log

@@ -1,6 +1,6 @@
 [package]
 name = "rustdocs_mcp_server"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 
 [dependencies]
@@ -23,6 +23,7 @@ cargo = { version = "0.86.0", default-features = false, features = ["vendored-op
 tempfile = "3.19.1"
 anyhow = "1.0.97"
 schemars = "0.8.22"
+clap = { version = "4.5.34", features = ["cargo", "derive", "env"] }
 
 
 # --- Platform Specific Dependencies ---

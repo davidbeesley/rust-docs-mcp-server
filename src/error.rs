@@ -6,8 +6,7 @@ use crate::doc_loader::DocLoaderError; // Need to import DocLoaderError from the
 pub enum ServerError {
     #[error("Environment variable not set: {0}")]
     MissingEnvVar(String),
-    #[error("Missing command line argument: {0}")]
-    MissingArgument(String),
+    // MissingArgument removed as clap handles this now
     #[error("Configuration Error: {0}")]
     Config(String),
 
