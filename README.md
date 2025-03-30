@@ -83,8 +83,8 @@ export OPENAI_API_KEY="sk-..."
 On the first run for a specific crate version *and feature set*, the server will:
 1.  Download the crate documentation using `cargo doc` (with specified features).
 2.  Parse the HTML documentation.
-3.  Generate embeddings for the documentation content using the OpenAI API (this may take some time and incur costs, though typically only fractions of a US penny for most crates, potentially a few pennies for crates with exceptionally large documentation).
-4.  Cache the documentation content and embeddings.
+3.  Generate embeddings for the documentation content using the OpenAI API (this may take some time and incur costs, though typically only fractions of a US penny for most crates; even a large crate like `async-stripe` with over 5000 documentation pages cost only $0.18 USD for embedding generation during testing).
+4.  Cache the documentation content and embeddings so that the cost isn't incurred again.
 5.  Start the MCP server.
 
 Subsequent runs for the same crate version *and feature set* will load the data from the cache, making startup much faster.
@@ -154,8 +154,7 @@ You can configure MCP clients like Roo Code to run multiple instances of this se
       "command": "rustdocs_mcp_server",
       "args": [
         "async-stripe@0.40",
-        "-F",
-        "runtime-tokio-hyper-rustls"
+        "-F runtime-tokio-hyper-rustls"
       ],
       "env": {
         "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY_HERE"
@@ -190,8 +189,7 @@ For Claude Desktop users, you can configure the server in the MCP settings. Here
       "command": "rustdocs_mcp_server",
       "args": [
         "async-stripe@0.40",
-        "-F",
-        "runtime-tokio-hyper-rustls"
+        "-F runtime-tokio-hyper-rustls"
       ]
     }
   }
