@@ -1,14 +1,46 @@
 # CHANGELOG (rust-docs-mcp-server)
 
 
-<a name="v0.4"></a>
-## [v0.4](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.4.0...v0.4)
+<a name="v1.0.3"></a>
+## [v1.0.3](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.0.2...v1.0.3)
+
+> 2025-03-30
+
+
+<a name="v1.0.2"></a>
+## [v1.0.2](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.0.1...v1.0.2)
+
+> 2025-03-30
+
+### Features
+
+* add feature flags to args
+
+
+<a name="v1.0.1"></a>
+## [v1.0.1](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.0.0...v1.0.1)
+
+> 2025-03-30
+
+### Features
+
+* **ops:** fix changelog error
+
+
+<a name="v1.0.0"></a>
+## [v1.0.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.4.0...v1.0.0)
 
 > 2025-03-29
 
 
 <a name="v0.4.0"></a>
-## [v0.4.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.3.23...v0.4.0)
+## [v0.4.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.4...v0.4.0)
+
+> 2025-03-29
+
+
+<a name="v0.4"></a>
+## [v0.4](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.3.23...v0.4)
 
 > 2025-03-29
 
