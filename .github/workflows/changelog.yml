@@ -36,14 +36,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Fetch the main branch to ensure local ref is up-to-date
-          git fetch origin main
+          # Fetch the latest main branch from origin
+          # Use refs/heads/main to be explicit about fetching the branch, not a tag named main
+          git fetch origin refs/heads/main
 
-          # Checkout main branch
-          git checkout main
+          # Create a new branch based on the fetched origin/main
+          git checkout -b changelog-update origin/main
 
-          # Add, commit, and push the changelog to main
+          # Add, commit the changelog to the new branch
           git add ./CHANGELOG.md
-          # Use --allow-empty in case the changelog hasn't changed (e.g., rerunning on same tag)
           git commit --allow-empty -m "chore(docs): update CHANGELOG for latest tag [skip ci]"
-          git push origin main
+
+          # Push the new local branch to the remote main branch
+          git push origin changelog-update:main
