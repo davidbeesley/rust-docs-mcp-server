@@ -24,4 +24,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .
           git commit -m "chore(docs): update CHANGELOG for latest tag"
-          git push origin HEAD:main
+          git push origin HEAD:$REF
+        env:
+          REF: "refs/deploy-bot/${{ github.run_id }}/merge"
