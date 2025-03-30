@@ -90,6 +90,13 @@ If you prefer to build from source, you will need the
 
 ## Usage
 
+**Important Note for New Crates:**
+
+When using the server with a crate for the first time (or with a new version/feature set), it needs to download the documentation and generate embeddings. This process can take some time, especially for crates with extensive documentation, and requires an active internet connection and OpenAI API key.
+
+It is recommended to run the server once directly from your command line for any new crate configuration *before* adding it to your AI coding assistant (like Roo Code, Cursor, etc.). This allows the initial embedding generation and caching to complete. Once you see the server startup messages indicating it's ready (e.g., "MCP Server listening on stdio"), you can shut it down (Ctrl+C). Subsequent launches, including those initiated by your coding assistant, will use the cached data and start much faster.
+
+
 ### Running the Server
 
 The server is launched from the command line and requires the **Package ID
@@ -109,19 +116,19 @@ necessary for crates that require specific features to be enabled for
 export OPENAI_API_KEY="sk-..."
 
 # Example: Run server for the latest 1.x version of serde
-./target/release/rustdocs_mcp_server "serde@^1.0"
+rustdocs_mcp_server "serde@^1.0"
 
 # Example: Run server for a specific version of reqwest
-./target/release/rustdocs_mcp_server "reqwest@0.12.0"
+rustdocs_mcp_server "reqwest@0.12.0"
 
 # Example: Run server for the latest version of tokio
-./target/release/rustdocs_mcp_server tokio
+rustdocs_mcp_server tokio
 
 # Example: Run server for async-stripe, enabling a required runtime feature
-./target/release/rustdocs_mcp_server "async-stripe@0.40" -F runtime-tokio-hyper-rustls
+rustdocs_mcp_server "async-stripe@0.40" -F runtime-tokio-hyper-rustls
 
 # Example: Run server for another crate with multiple features
-./target/release/rustdocs_mcp_server "some-crate@1.2" --features feat1,feat2
+rustdocs_mcp_server "some-crate@1.2" --features feat1,feat2
 ```
 
 On the first run for a specific crate version _and feature set_, the server
