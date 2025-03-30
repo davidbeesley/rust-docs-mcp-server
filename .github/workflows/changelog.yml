@@ -14,16 +14,28 @@ jobs:
           fetch-tags: true
           fetch-depth: 0
           repository: "Govcraft/rust-docs-mcp-server"
-      - run: |
+      - name: Generate and Commit Changelog
+        run: |
+          # Download and extract git-chglog
           wget https://github.com/git-chglog/git-chglog/releases/download/v0.15.4/git-chglog_0.15.4_linux_amd64.tar.gz
           tar -xvzf git-chglog_0.15.4_linux_amd64.tar.gz
+
+          # Generate changelog
           ./git-chglog -o ./CHANGELOG.md
+
+          # Clean up downloaded files
           rm git-chglog_0.15.4_linux_amd64.tar.gz
           rm git-chglog
+
+          # Configure git user
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Checkout main branch
+          git checkout main
+
+          # Add, commit, and push the changelog to main
           git add ./CHANGELOG.md
-          git commit -m "chore(docs): update CHANGELOG for latest tag"
-          git push origin HEAD:$REF
-        env:
-          REF: "refs/deploy-bot/${{ github.run_id }}/merge"
+          # Use --allow-empty in case the changelog hasn't changed (e.g., rerunning on same tag)
+          git commit --allow-empty -m "chore(docs): update CHANGELOG for latest tag [skip ci]"
+          git push origin main
