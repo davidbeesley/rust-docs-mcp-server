@@ -181,6 +181,8 @@ jobs:
           
           
           echo "Cleaning up temporary local branch..."
+          # Switch away from the branch before deleting it
+          git checkout --detach
           git branch -D changelog-update
           echo "Pushing changelog commit to remote main branch..."
           # Push the new local branch specifically to the remote *branch* main
