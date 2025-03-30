@@ -137,56 +137,45 @@ jobs:
 
       - name: Generate and Commit Changelog
         run: |
-          echo "Installing git-chglog..."
+          # Create a temporary directory for extraction
           mkdir chglog_tmp
+
+          # Download git-chglog archive
           wget https://github.com/git-chglog/git-chglog/releases/download/v0.15.4/git-chglog_0.15.4_linux_amd64.tar.gz
+
+          # Extract into the temporary directory
           tar -xvzf git-chglog_0.15.4_linux_amd64.tar.gz -C chglog_tmp
-          
-          echo "Generating changelog..."
+
+          # Generate changelog using the extracted executable
           ./chglog_tmp/git-chglog -o ./CHANGELOG.md
-          
-          echo "Cleaning up git-chglog files..."
+
+          # Clean up downloaded archive and temporary directory
           rm git-chglog_0.15.4_linux_amd64.tar.gz
           rm -rf chglog_tmp
-          
-          echo "Configuring git user..."
+
+          # Configure git user
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          echo "Fetching main branch..."
-          # Fetch the latest main branch from origin
-          git fetch origin refs/heads/main
-          
-          echo "Creating temporary branch based on origin/main..."
-          # Create a new branch based on the fetched origin/main
-          echo "Stashing generated CHANGELOG.md..."
-          # Stash the generated changelog (include untracked files like CHANGELOG.md if new)
-          git stash push -u -- CHANGELOG.md
 
+          # Fetch the latest main branch from origin
+          # Use refs/heads/main to be explicit about fetching the branch, not a tag named main
+          git fetch origin refs/heads/main
+
+          # Create a new branch based on the fetched origin/main
           git checkout -b changelog-update origin/main
 
-          echo "Adding and committing CHANGELOG.md..."
-          echo "Applying stashed CHANGELOG.md..."
-          # Apply the stashed changes (the generated CHANGELOG.md)
-          # Use || true in case stash is empty (e.g., changelog didn't change)
-          git stash pop || true
-
+          # Add, commit the changelog to the new branch
           git add ./CHANGELOG.md
-          # Check if there are changes to commit to avoid empty commit error if file exists and is unchanged
-          if ! git diff --staged --quiet; then
-            git commit -m "chore(docs): update CHANGELOG for release ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }} [skip ci]"
-          else
-            echo "No changes to CHANGELOG.md to commit."
-          fi
-          
-          
-          echo "Cleaning up temporary local branch..."
-          # Switch away from the branch before deleting it
-          git checkout --detach
-          git branch -D changelog-update
-          echo "Pushing changelog commit to remote main branch..."
+          # Use --allow-empty in case the changelog hasn't changed (e.g., rerunning on same tag)
+          git commit --allow-empty -m "chore(docs): update CHANGELOG for release ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }} [skip ci]"
+
           # Push the new local branch specifically to the remote *branch* main
           git push origin changelog-update:refs/heads/main
+
+          # Clean up the temporary local branch (optional but good practice)
+          # We might need to checkout --detach first if this fails
+          git branch -D changelog-update || echo "Could not delete local branch changelog-update"
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
