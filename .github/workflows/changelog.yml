@@ -16,16 +16,21 @@ jobs:
           repository: "Govcraft/rust-docs-mcp-server"
       - name: Generate and Commit Changelog
         run: |
-          # Download and extract git-chglog
+          # Create a temporary directory for extraction
+          mkdir chglog_tmp
+
+          # Download git-chglog archive
           wget https://github.com/git-chglog/git-chglog/releases/download/v0.15.4/git-chglog_0.15.4_linux_amd64.tar.gz
-          tar -xvzf git-chglog_0.15.4_linux_amd64.tar.gz
 
-          # Generate changelog
-          ./git-chglog -o ./CHANGELOG.md
+          # Extract into the temporary directory
+          tar -xvzf git-chglog_0.15.4_linux_amd64.tar.gz -C chglog_tmp
 
-          # Clean up downloaded files
+          # Generate changelog using the extracted executable
+          ./chglog_tmp/git-chglog -o ./CHANGELOG.md
+
+          # Clean up downloaded archive and temporary directory
           rm git-chglog_0.15.4_linux_amd64.tar.gz
-          rm git-chglog
+          rm -rf chglog_tmp
 
           # Configure git user
           git config user.name "github-actions[bot]"
