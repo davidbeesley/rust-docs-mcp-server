@@ -1,6 +1,22 @@
 # CHANGELOG (rust-docs-mcp-server)
 
 
+<a name="v0.4"></a>
+## [v0.4](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.4.0...v0.4)
+
+> 2025-03-29
+
+
+<a name="v0.4.0"></a>
+## [v0.4.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.3.23...v0.4.0)
+
+> 2025-03-29
+
+### Features
+
+* **ops:** move chglog gen to release workflow
+
+
 <a name="v0.3.23"></a>
 ## [v0.3.23](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.3.22...v0.3.23)
 
