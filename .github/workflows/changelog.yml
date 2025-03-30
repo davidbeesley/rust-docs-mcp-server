@@ -47,5 +47,5 @@ jobs:
           git add ./CHANGELOG.md
           git commit --allow-empty -m "chore(docs): update CHANGELOG for latest tag [skip ci]"
 
-          # Push the new local branch to the remote main branch
-          git push origin changelog-update:main
+          # Push the new local branch specifically to the remote *branch* main
+          git push origin changelog-update:refs/heads/main
