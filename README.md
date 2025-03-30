@@ -20,9 +20,10 @@ This server fetches the documentation for a specified Rust crate, generates embe
 ## Features
 
 *   **Targeted Documentation:** Focuses on a single Rust crate per server instance.
+*   **Feature Support:** Allows specifying required crate features for documentation generation.
 *   **Semantic Search:** Uses OpenAI's `text-embedding-3-small` model to find the most relevant documentation sections for a given question.
 *   **LLM Summarization:** Leverages OpenAI's `gpt-4o-mini-2024-07-18` model to generate concise answers based *only* on the retrieved documentation context.
-*   **Caching:** Caches generated documentation content and embeddings in the user's XDG data directory (`~/.local/share/rustdocs-mcp-server/` or similar) to speed up subsequent launches for the same crate and version.
+*   **Caching:** Caches generated documentation content and embeddings in the user's XDG data directory (`~/.local/share/rustdocs-mcp-server/` or similar) based on crate, version, *and* requested features to speed up subsequent launches.
 *   **MCP Integration:** Runs as a standard MCP server over stdio, exposing tools and resources.
 
 ## Prerequisites
@@ -55,7 +56,9 @@ If you prefer to build from source, you will need the [Rust Toolchain](https://r
 
 ### Running the Server
 
-The server is launched from the command line and requires a single argument: the **Package ID Specification** for the target crate. This specification follows the format used by Cargo (e.g., `crate_name`, `crate_name@version_req`). For the full specification details, see `man cargo-pkgid` or the [Cargo documentation](https://doc.rust-lang.org/cargo/reference/pkgid-spec.html).
+The server is launched from the command line and requires the **Package ID Specification** for the target crate. This specification follows the format used by Cargo (e.g., `crate_name`, `crate_name@version_req`). For the full specification details, see `man cargo-pkgid` or the [Cargo documentation](https://doc.rust-lang.org/cargo/reference/pkgid-spec.html).
+
+Optionally, you can specify required crate features using the `-F` or `--features` flag, followed by a comma-separated list of features. This is necessary for crates that require specific features to be enabled for `cargo doc` to succeed (e.g., crates requiring a runtime feature like `async-stripe`).
 
 ```bash
 # Set the API key (replace with your actual key)
@@ -69,16 +72,22 @@ export OPENAI_API_KEY="sk-..."
 
 # Example: Run server for the latest version of tokio
 ./target/release/rustdocs_mcp_server tokio
+
+# Example: Run server for async-stripe, enabling a required runtime feature
+./target/release/rustdocs_mcp_server "async-stripe@0.40" -F runtime-tokio-hyper-rustls
+
+# Example: Run server for another crate with multiple features
+./target/release/rustdocs_mcp_server "some-crate@1.2" --features feat1,feat2
 ```
 
-On the first run for a specific crate version, the server will:
-1.  Download the crate documentation using `cargo doc`.
+On the first run for a specific crate version *and feature set*, the server will:
+1.  Download the crate documentation using `cargo doc` (with specified features).
 2.  Parse the HTML documentation.
 3.  Generate embeddings for the documentation content using the OpenAI API (this may take some time and incur costs, though typically only fractions of a US penny for most crates, potentially a few pennies for crates with exceptionally large documentation).
 4.  Cache the documentation content and embeddings.
 5.  Start the MCP server.
 
-Subsequent runs for the same crate version will load the data from the cache, making startup much faster.
+Subsequent runs for the same crate version *and feature set* will load the data from the cache, making startup much faster.
 
 ### MCP Interaction
 
@@ -125,7 +134,7 @@ The server communicates using the Model Context Protocol over standard input/out
 
 ### Example Client Configuration (Roo Code)
 
-You can configure MCP clients like Roo Code to run multiple instances of this server, each targeting a different crate. Here's an example snippet for Roo Code's `mcp_settings.json` file, configuring servers for `reqwest` and `sqlx`:
+You can configure MCP clients like Roo Code to run multiple instances of this server, each targeting a different crate. Here's an example snippet for Roo Code's `mcp_settings.json` file, configuring servers for `reqwest` and `async-stripe` (note the added features argument for `async-stripe`):
 
 ```json
 {
@@ -141,10 +150,12 @@ You can configure MCP clients like Roo Code to run multiple instances of this se
       "disabled": false,
       "alwaysAllow": []
     },
-    "rust-docs-sqlx": {
+    "rust-docs-async-stripe": {
       "command": "rustdocs_mcp_server",
       "args": [
-        "sqlx@0.8.3"
+        "async-stripe@0.40",
+        "-F",
+        "runtime-tokio-hyper-rustls"
       ],
       "env": {
         "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY_HERE"
@@ -159,28 +170,61 @@ You can configure MCP clients like Roo Code to run multiple instances of this se
 **Note:**
 *   Replace `/path/to/your/rustdocs_mcp_server` with the actual path to the compiled binary on your system if it isn't in your PATH.
 *   Replace `YOUR_OPENAI_API_KEY_HERE` with your actual OpenAI API key.
-*   The keys (`rust-docs-reqwest`, `rust-docs-sqlx`) are arbitrary names you choose to identify the server instances within Roo Code.
+*   The keys (`rust-docs-reqwest`, `rust-docs-async-stripe`) are arbitrary names you choose to identify the server instances within Roo Code.
+
+
+### Example Client Configuration (Claude Desktop)
+
+For Claude Desktop users, you can configure the server in the MCP settings. Here's an example configuring servers for `serde` and `async-stripe`:
+
+```json
+{
+  "mcpServers": {
+    "rust-docs-serde": {
+      "command": "/path/to/your/rustdocs_mcp_server",
+      "args": [
+        "serde@^1.0"
+      ]
+    },
+    "rust-docs-async-stripe-rt": {
+      "command": "rustdocs_mcp_server",
+      "args": [
+        "async-stripe@0.40",
+        "-F",
+        "runtime-tokio-hyper-rustls"
+      ]
+    }
+  }
+}
+```
+
+**Note:**
+*   Ensure `rustdocs_mcp_server` is in your system's PATH or provide the full path (e.g., `/path/to/your/rustdocs_mcp_server`).
+*   The keys (`rust-docs-serde`, `rust-docs-async-stripe-rt`) are arbitrary names you choose to identify the server instances.
+*   Remember to set the `OPENAI_API_KEY` environment variable where Claude Desktop can access it (this might be system-wide or via how you launch Claude Desktop). Claude Desktop's MCP configuration might not directly support setting environment variables per-server like Roo Code.
+*   The example shows how to add the `-F` argument for crates like `async-stripe` that require specific features.
 
 ### Caching
 
-*   **Location:** Cached documentation and embeddings are stored in the XDG data directory, typically under `~/.local/share/rustdocs-mcp-server/<crate_name>/<sanitized_version_req>/embeddings.bin`. The `sanitized_version_req` is derived from the version requirement provided at startup.
+*   **Location:** Cached documentation and embeddings are stored in the XDG data directory, typically under `~/.local/share/rustdocs-mcp-server/<crate_name>/<sanitized_version_req>/<features_hash>/embeddings.bin`. The `sanitized_version_req` is derived from the version requirement, and `features_hash` is a hash representing the specific combination of features requested at startup. This ensures different feature sets are cached separately.
 *   **Format:** Data is cached using `bincode` serialization.
 *   **Regeneration:** If the cache file is missing, corrupted, or cannot be decoded, the server will automatically regenerate the documentation and embeddings.
 
 ## How it Works
 
-1.  **Initialization:** Takes the crate specification from the command line.
-2.  **Cache Check:** Looks for a pre-existing cache file for the specific crate and version requirement.
+1.  **Initialization:** Parses the crate specification and optional features from the command line using `clap`.
+2.  **Cache Check:** Looks for a pre-existing cache file for the specific crate, version requirement, and feature set.
 3.  **Documentation Generation (if cache miss):**
-    *   Creates a temporary Rust project depending only on the target crate.
+    *   Creates a temporary Rust project depending only on the target crate, enabling the specified features in its `Cargo.toml`.
     *   Runs `cargo doc` using the `cargo` library API to generate HTML documentation in the temporary directory.
+    *   Dynamically locates the correct output directory within `target/doc` by searching for the subdirectory containing `index.html`.
 4.  **Content Extraction (if cache miss):**
-    *   Walks the generated HTML files.
+    *   Walks the generated HTML files within the located documentation directory.
     *   Uses the `scraper` crate to parse each HTML file and extract text content from the main content area (`<section id="main-content">`).
 5.  **Embedding Generation (if cache miss):**
     *   Uses the `async-openai` crate and `tiktoken-rs` to generate embeddings for each extracted document chunk using the `text-embedding-3-small` model.
     *   Calculates the estimated cost based on the number of tokens processed.
-6.  **Caching (if cache miss):** Saves the extracted document content and their corresponding embeddings to the cache file using `bincode`.
+6.  **Caching (if cache miss):** Saves the extracted document content and their corresponding embeddings to the cache file (path includes features hash) using `bincode`.
 7.  **Server Startup:** Initializes the `RustDocsServer` with the loaded/generated documents and embeddings.
 8.  **MCP Serving:** Starts the MCP server using `rmcp` over stdio.
 9.  **Query Handling (`query_rust_docs` tool):**
