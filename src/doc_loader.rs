@@ -1,5 +1,5 @@
 use scraper::{Html, Selector};
-use std::{fs::{self, File, create_dir_all}, io::Write, path::PathBuf}; // Added PathBuf
+use std::{collections::HashMap, fs::{self, File, create_dir_all}, io::Write, path::PathBuf}; // Added PathBuf, HashMap
 use cargo::core::resolver::features::CliFeatures;
 // use cargo::core::SourceId; // Removed unused import
 // use cargo::util::Filesystem; // Removed unused import
@@ -25,8 +25,7 @@ pub enum DocLoaderError {
     TempDirCreationFailed(std::io::Error),
     #[error("Cargo library error: {0}")]
     CargoLib(#[from] AnyhowError), // Re-add CargoLib variant
-    #[error("Failed to strip prefix '{prefix}' from path '{path}': {source}")] // Improved error
-    StripPrefix { prefix: PathBuf, path: PathBuf, source: std::path::StripPrefixError },
+    // Removed unused StripPrefix variant
 }
 
 // Simple struct to hold document content, maybe add path later if needed
@@ -36,6 +35,7 @@ pub struct Document {
     pub content: String,
 }
 
+
 /// Generates documentation for a given crate in a temporary directory,
 /// then loads and parses the HTML documents.
 /// Extracts text content from the main content area of rustdoc generated HTML.
@@ -44,23 +44,12 @@ pub fn load_documents(
     crate_version_req: &str,
     features: Option<&Vec<String>>, // Add optional features parameter
 ) -> Result<Vec<Document>, DocLoaderError> {
-    eprintln!(
-        "[DEBUG] load_documents called with crate_name: '{}', crate_version_req: '{}', features: {:?}",
-        crate_name, crate_version_req, features
-    );
     let mut documents = Vec::new();
 
     let temp_dir = tempdir().map_err(DocLoaderError::TempDirCreationFailed)?;
     let temp_dir_path = temp_dir.path();
     let temp_manifest_path = temp_dir_path.join("Cargo.toml");
 
-    eprintln!(
-        "Generating documentation for crate '{}' (Version Req: '{}', Features: {:?}) in temporary directory: {}",
-        crate_name,
-        crate_version_req,
-        features, // Log features
-        temp_dir_path.display()
-    );
 
     // Create a temporary Cargo.toml using the version requirement and features
     let features_string = features
@@ -159,7 +148,6 @@ edition = "2021"
 
     let docs_path = match (found_count, target_docs_path) {
         (1, Some(path)) => {
-            eprintln!("[DEBUG] Confirmed unique documentation directory: {}", path.display());
             path
         },
         (0, _) => {
@@ -184,57 +172,143 @@ edition = "2021"
     let content_selector = Selector::parse("section#main-content.content")
         .map_err(|e| DocLoaderError::Selector(e.to_string()))?;
 
-    for entry in WalkDir::new(&docs_path)
+    // --- Collect all HTML file paths first ---
+    let all_html_paths: Vec<PathBuf> = WalkDir::new(&docs_path)
         .into_iter()
-        .filter_map(Result::ok) // Ignore errors during iteration for now
-        .filter(|e| !e.file_type().is_dir() && e.path().extension().is_some_and(|ext| ext == "html"))
-    {
-        let path = entry.path();
-        // Calculate path relative to the docs_path root
-        let relative_path = path.strip_prefix(&docs_path).map_err(|e| {
-            // Provide more context in the error message using the new error variant
-            DocLoaderError::StripPrefix {
-                prefix: docs_path.to_path_buf(),
-                path: path.to_path_buf(),
-                source: e,
+        .filter_map(Result::ok) // Ignore errors during iteration
+        .filter(|e| {
+            !e.file_type().is_dir() && e.path().extension().is_some_and(|ext| ext == "html")
+        })
+        .map(|e| e.into_path()) // Get the PathBuf
+        .collect();
+
+    eprintln!("[DEBUG] Found {} total HTML files initially.", all_html_paths.len());
+
+    // --- Group files by basename ---
+    let mut basename_groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for path in all_html_paths {
+        if let Some(filename_osstr) = path.file_name() {
+            if let Some(filename_str) = filename_osstr.to_str() {
+                basename_groups
+                    .entry(filename_str.to_string())
+                    .or_default()
+                    .push(path);
+            } else {
+                 eprintln!("[WARN] Skipping file with non-UTF8 name: {}", path.display());
             }
-        })?;
-        let path_str = relative_path.to_string_lossy().to_string(); // Use the relative path
-        // eprintln!("Processing file: {} (relative: {})", path.display(), path_str); // Updated debug log
+        } else {
+             eprintln!("[WARN] Skipping file with no name: {}", path.display());
+        }
+    }
 
-        // eprintln!("  Reading file content..."); // Added
-        let html_content = fs::read_to_string(path)?; // Still read from the absolute path
-        // eprintln!("  Parsing HTML..."); // Added
+    // --- Initialize paths_to_process and explicitly add the root index.html if it exists --- 
+    let mut paths_to_process: Vec<PathBuf> = Vec::new();
+    let root_index_path = docs_path.join("index.html");
+    if root_index_path.is_file() {
+        paths_to_process.push(root_index_path);
+    }
 
-        // Parse the HTML document
+    // --- Filter based on duplicates and size ---
+    // NOTE: Initialization of paths_to_process moved before this loop
+    for (basename, mut paths) in basename_groups {
+        // Always ignore index.html at this stage (except the root one added earlier)
+        if basename == "index.html" {
+            continue;
+        }
+
+        // Also ignore files within source code view directories
+        // Check the first path (they should share the problematic component if any)
+        if paths.first().map_or(false, |p| p.components().any(|comp| comp.as_os_str() == "src")) {
+             continue;
+        }
+
+
+        if paths.len() == 1 {
+            // Single file with this basename (and not index.html), keep it
+            paths_to_process.push(paths.remove(0));
+        } else {
+            // Multiple files with the same basename (duplicates)
+            // Find the largest one by file size
+            // Explicit type annotation needed for the error type in try_fold
+            let largest_path_result: Result<Option<(PathBuf, u64)>, std::io::Error> = paths.into_iter().try_fold(None::<(PathBuf, u64)>, |largest, current| {
+                let current_meta = fs::metadata(&current)?;
+                let current_size = current_meta.len();
+                match largest {
+                    None => Ok(Some((current, current_size))),
+                    Some((largest_path_so_far, largest_size_so_far)) => {
+                        if current_size > largest_size_so_far {
+                            Ok(Some((current, current_size)))
+                        } else {
+                            Ok(Some((largest_path_so_far, largest_size_so_far)))
+                        }
+                    }
+                }
+            });
+
+            match largest_path_result {
+                Ok(Some((p, _size))) => {
+                    // eprintln!("[DEBUG] Duplicate basename '{}': Keeping largest file {}", basename, p.display());
+                    paths_to_process.push(p);
+                }
+                Ok(None) => {
+                     // This case should ideally not happen if the input `paths` was not empty,
+                     // but handle it defensively.
+                     eprintln!("[WARN] No files found for basename '{}' during size comparison.", basename);
+                }
+                Err(e) => {
+                    eprintln!("[WARN] Error getting metadata for basename '{}', skipping: {}", basename, e);
+                    // Decide if you want to skip the whole group or handle differently
+                }
+            }
+        }
+    }
+
+     eprintln!("[DEBUG] Filtered down to {} files to process.", paths_to_process.len());
+
+
+    // --- Process the filtered list of files ---
+    for path in paths_to_process {
+        // Calculate path relative to the docs_path root
+        let relative_path = match path.strip_prefix(&docs_path) {
+             Ok(p) => p.to_path_buf(),
+             Err(e) => {
+                 eprintln!("[WARN] Failed to strip prefix {} from {}: {}", docs_path.display(), path.display(), e);
+                 continue; // Skip if path manipulation fails
+             }
+        };
+        let path_str = relative_path.to_string_lossy().to_string();
+
+        let html_content = match fs::read_to_string(&path) { // Read from the absolute path
+             Ok(content) => content,
+             Err(e) => {
+                 eprintln!("[WARN] Failed to read file {}: {}", path.display(), e);
+                 continue; // Skip this file if reading fails
+             }
+        };
+
         let document = Html::parse_document(&html_content);
 
-        // Select the main content element
         if let Some(main_content_element) = document.select(&content_selector).next() {
-            // Extract all text nodes within the main content
-            // eprintln!("  Extracting text content..."); // Added
             let text_content: String = main_content_element
                 .text()
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<&str>>()
-                .join("\n"); // Join text nodes with newlines
+                .join("\n");
 
             if !text_content.is_empty() {
-                // eprintln!("  Extracted content ({} chars)", text_content.len()); // Uncommented and simplified
                 documents.push(Document {
                     path: path_str,
                     content: text_content,
                 });
             } else {
-                // eprintln!("No text content found in main section for: {}", path.display()); // Verbose logging
+                 // eprintln!("[DEBUG] No text content found in main section for: {}", path.display());
             }
         } else {
-             // eprintln!("'main-content' selector not found for: {}", path.display()); // Verbose logging
-             // Optionally handle files without the main content selector differently
+             // eprintln!("[DEBUG] 'main-content' selector not found for: {}", path.display());
         }
     }
 
-    eprintln!("Finished document loading. Found {} documents.", documents.len());
+    eprintln!("Finished document loading. Found {} final documents.", documents.len());
     Ok(documents)
 }
