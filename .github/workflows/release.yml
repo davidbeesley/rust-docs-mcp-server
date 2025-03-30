@@ -159,9 +159,18 @@ jobs:
           
           echo "Creating temporary branch based on origin/main..."
           # Create a new branch based on the fetched origin/main
+          echo "Stashing generated CHANGELOG.md..."
+          # Stash the generated changelog (include untracked files like CHANGELOG.md if new)
+          git stash push -u -- CHANGELOG.md
+
           git checkout -b changelog-update origin/main
 
           echo "Adding and committing CHANGELOG.md..."
+          echo "Applying stashed CHANGELOG.md..."
+          # Apply the stashed changes (the generated CHANGELOG.md)
+          # Use || true in case stash is empty (e.g., changelog didn't change)
+          git stash pop || true
+
           git add ./CHANGELOG.md
           # Check if there are changes to commit to avoid empty commit error if file exists and is unchanged
           if ! git diff --staged --quiet; then
@@ -170,6 +179,9 @@ jobs:
             echo "No changes to CHANGELOG.md to commit."
           fi
           
+          
+          echo "Cleaning up temporary local branch..."
+          git branch -D changelog-update
           echo "Pushing changelog commit to remote main branch..."
           # Push the new local branch specifically to the remote *branch* main
           git push origin changelog-update:refs/heads/main
