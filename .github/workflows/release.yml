@@ -1,9 +1,9 @@
 name: Release
 
 on:
-  # push:
-  #   tags:
-  #     - 'v*.*.*' # Trigger on version tags like v1.0.0
+  push:
+    tags:
+      - 'v*.*.*' # Trigger on version tags like v1.0.0
   workflow_dispatch: # Allows manual triggering
     inputs:
       version:
@@ -98,11 +98,15 @@ jobs:
             exit 1
           fi
 
-          # Compress the binary with UPX
-          echo "Compressing binary with UPX..."
-          upx --best --lzma "$BINARY_PATH"
+          # Compress the binary with UPX (skip on macOS)
+          if [[ "${{ runner.os }}" != "macOS" ]]; then
+            echo "Compressing binary with UPX..."
+            upx --best --lzma "$BINARY_PATH"
+          else
+            echo "Skipping UPX compression on macOS."
+          fi
 
-          # Rename binary to the desired asset name AFTER compression
+          # Rename binary to the desired asset name AFTER potential compression
           mv "$BINARY_PATH" "$TARGET_DIR/$ASSET_NAME"
           echo "Renamed compressed binary to $TARGET_DIR/$ASSET_NAME"
 
