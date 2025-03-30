@@ -125,6 +125,57 @@ jobs:
     needs: build_assets
     runs-on: ubuntu-latest
     steps:
+      - name: Check out repo for changelog generation
+        uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+          # Ensure we checkout the repo where the workflow runs, not a fork
+          repository: ${{ github.repository }}
+          # Use the token with write permissions
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate and Commit Changelog
+        run: |
+          echo "Installing git-chglog..."
+          mkdir chglog_tmp
+          wget https://github.com/git-chglog/git-chglog/releases/download/v0.15.4/git-chglog_0.15.4_linux_amd64.tar.gz
+          tar -xvzf git-chglog_0.15.4_linux_amd64.tar.gz -C chglog_tmp
+          
+          echo "Generating changelog..."
+          ./chglog_tmp/git-chglog -o ./CHANGELOG.md
+          
+          echo "Cleaning up git-chglog files..."
+          rm git-chglog_0.15.4_linux_amd64.tar.gz
+          rm -rf chglog_tmp
+          
+          echo "Configuring git user..."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          echo "Fetching main branch..."
+          # Fetch the latest main branch from origin
+          git fetch origin refs/heads/main
+          
+          echo "Creating temporary branch based on origin/main..."
+          # Create a new branch based on the fetched origin/main
+          git checkout -b changelog-update origin/main
+
+          echo "Adding and committing CHANGELOG.md..."
+          git add ./CHANGELOG.md
+          # Check if there are changes to commit to avoid empty commit error if file exists and is unchanged
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(docs): update CHANGELOG for release ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }} [skip ci]"
+          else
+            echo "No changes to CHANGELOG.md to commit."
+          fi
+          
+          echo "Pushing changelog commit to remote main branch..."
+          # Push the new local branch specifically to the remote *branch* main
+          git push origin changelog-update:refs/heads/main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
