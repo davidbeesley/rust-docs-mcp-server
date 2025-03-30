@@ -89,12 +89,9 @@ edition = "2021"
     let src_path = temp_dir_path.join("src");
     create_dir_all(&src_path)?;
     File::create(src_path.join("lib.rs"))?;
-    eprintln!("[DEBUG] Created empty src/lib.rs at: {}", src_path.join("lib.rs").display());
 
     let mut temp_manifest_file = File::create(&temp_manifest_path)?;
     temp_manifest_file.write_all(cargo_toml_content.as_bytes())?;
-    eprintln!("[DEBUG] Created temporary manifest at: {}", temp_manifest_path.display());
-    eprintln!("[DEBUG] Temporary Manifest Content:\n{}", cargo_toml_content); // Log content
 
 
     // --- Use Cargo API ---
@@ -115,10 +112,8 @@ edition = "2021"
 
     // Use the temporary manifest path for the Workspace
     let mut ws = Workspace::new(&temp_manifest_path, &config)?; // Make ws mutable
-    eprintln!("[DEBUG] Workspace target dir before set: {}", ws.target_dir().as_path_unlocked().display());
     // Set target_dir directly on Workspace
     ws.set_target_dir(cargo::util::Filesystem::new(temp_dir_path.to_path_buf()));
-    eprintln!("[DEBUG] Workspace target dir after set: {}", ws.target_dir().as_path_unlocked().display());
 
     // Create CompileOptions, relying on ::new for BuildConfig
     let mut compile_opts = CompileOptions::new(&config, cargo::core::compiler::CompileMode::Doc { deps: false, json: false })?;
@@ -133,13 +128,7 @@ edition = "2021"
         open_result: false, // Don't open in browser
         output_format: ops::OutputFormat::Html,
     };
-    eprintln!("[DEBUG] package_spec for CompileOptions: '{}'", package_spec);
 
-    // Debug print relevant options before calling ops::doc
-    eprintln!("[DEBUG] CompileOptions spec: {:?}", doc_opts.compile_opts.spec);
-    eprintln!("[DEBUG] CompileOptions cli_features: {:?}", doc_opts.compile_opts.cli_features); // Features for temp crate
-    eprintln!("[DEBUG] CompileOptions build_config mode: {:?}", doc_opts.compile_opts.build_config.mode);
-    eprintln!("[DEBUG] DocOptions output_format: {:?}", doc_opts.output_format);
 
     ops::doc(&ws, &doc_opts).map_err(DocLoaderError::CargoLib)?; // Use ws
     // --- End Cargo API ---
@@ -147,7 +136,6 @@ edition = "2021"
     // --- Find the actual documentation directory ---
     // Iterate through subdirectories in `target/doc` and find the one containing `index.html`.
     let base_doc_path = temp_dir_path.join("doc");
-    eprintln!("[DEBUG] Base doc path: {}", base_doc_path.display());
 
     let mut target_docs_path: Option<PathBuf> = None;
     let mut found_count = 0;
@@ -155,18 +143,15 @@ edition = "2021"
     if base_doc_path.is_dir() {
         for entry_result in fs::read_dir(&base_doc_path)? {
             let entry = entry_result?;
-            eprintln!("[DEBUG] Checking directory entry: {}", entry.path().display()); // Log entry being checked
             if entry.file_type()?.is_dir() {
                 let dir_path = entry.path();
                 let index_html_path = dir_path.join("index.html");
                 if index_html_path.is_file() {
-                    eprintln!("[DEBUG] Found potential docs directory with index.html: {}", dir_path.display());
                     if target_docs_path.is_none() {
                         target_docs_path = Some(dir_path);
                     }
                     found_count += 1;
                 } else {
-                     eprintln!("[DEBUG] Skipping directory without index.html: {}", dir_path.display());
                 }
             }
         }
@@ -198,9 +183,6 @@ edition = "2021"
     // This might need adjustment based on the exact rustdoc version/theme
     let content_selector = Selector::parse("section#main-content.content")
         .map_err(|e| DocLoaderError::Selector(e.to_string()))?;
-    eprintln!("[DEBUG] Calculated final docs_path: {}", docs_path.display());
-
-    eprintln!("Starting document loading from: {}", docs_path.display());
 
     for entry in WalkDir::new(&docs_path)
         .into_iter()
