@@ -17,7 +17,7 @@ jobs:
       - run: |
           wget https://github.com/git-chglog/git-chglog/releases/download/v0.15.4/git-chglog_0.15.4_linux_amd64.tar.gz
           tar -xvzf git-chglog_0.15.4_linux_amd64.tar.gz
-          ./git-chglog -o CHANGELOG.md
+          ./git-chglog -o ./CHANGELOG.md
           rm git-chglog_0.15.4_linux_amd64.tar.gz
           rm git-chglog
           git config user.name "github-actions[bot]"
