@@ -67,8 +67,10 @@ async fn main() -> Result<(), ServerError> {
 
     // --- Parse CLI Arguments ---
     let cli = Cli::parse();
-    let specid_str = cli.package_spec;
-    let features = cli.features; // This is Option<Vec<String>>
+    let specid_str = cli.package_spec.trim().to_string(); // Trim whitespace
+    let features = cli.features.map(|f| {
+        f.into_iter().map(|s| s.trim().to_string()).collect() // Trim each feature
+    });
 
     // Parse the specid string
     let spec = PackageIdSpec::parse(&specid_str).map_err(|e| {
