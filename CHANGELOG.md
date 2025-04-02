@@ -1,6 +1,16 @@
 # CHANGELOG (rust-docs-mcp-server)
 
 
+<a name="v1.1.1"></a>
+## [v1.1.1](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.1.0...v1.1.1)
+
+> 2025-04-02
+
+### Bug Fixes
+
+* trim arguments of whitespace
+
+
 <a name="v1.1.0"></a>
 ## [v1.1.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.0.4...v1.1.0)
 
@@ -48,19 +58,19 @@
 
 
 <a name="v1.0.0"></a>
-## [v1.0.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.4.0...v1.0.0)
-
-> 2025-03-29
-
-
-<a name="v0.4.0"></a>
-## [v0.4.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.4...v0.4.0)
+## [v1.0.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.4...v1.0.0)
 
 > 2025-03-29
 
 
 <a name="v0.4"></a>
-## [v0.4](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.3.23...v0.4)
+## [v0.4](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.4.0...v0.4)
+
+> 2025-03-29
+
+
+<a name="v0.4.0"></a>
+## [v0.4.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.3.23...v0.4.0)
 
 > 2025-03-29
 
