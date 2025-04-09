@@ -1,6 +1,23 @@
 # CHANGELOG (rust-docs-mcp-server)
 
 
+<a name="v1.2.0"></a>
+## [v1.2.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.1.1...v1.2.0)
+
+> 2025-04-08
+
+### Bug Fixes
+
+* **doc_loader:** preserve raw content for source files
+* **doc_loader:** use HTML title to find doc path
+
+### Features
+
+* **doc_loader:** include source files in documentation processing
+* **doc_loader:** include markdown files in loaded documentation
+* **retrieval:** Implement Top-K chunk retrieval for context generation
+
+
 <a name="v1.1.1"></a>
 ## [v1.1.1](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.1.0...v1.1.1)
 
@@ -48,13 +65,19 @@
 
 
 <a name="v1.0.1"></a>
-## [v1.0.1](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.0.0...v1.0.1)
+## [v1.0.1](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.4.0...v1.0.1)
 
 > 2025-03-30
 
 ### Features
 
 * **ops:** fix changelog error
+
+
+<a name="v0.4.0"></a>
+## [v0.4.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.0.0...v0.4.0)
+
+> 2025-03-29
 
 
 <a name="v1.0.0"></a>
@@ -64,13 +87,7 @@
 
 
 <a name="v0.4"></a>
-## [v0.4](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.4.0...v0.4)
-
-> 2025-03-29
-
-
-<a name="v0.4.0"></a>
-## [v0.4.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.3.23...v0.4.0)
+## [v0.4](https://github.com/Govcraft/rust-docs-mcp-server/compare/v0.3.23...v0.4)
 
 > 2025-03-29
 
