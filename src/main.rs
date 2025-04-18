@@ -214,12 +214,10 @@ async fn main() -> Result<(), ServerError> {
             documents_for_server = loaded_documents.clone();
 
             eprintln!("Generating embeddings...");
-            let (generated_embeddings, total_tokens) = generate_embeddings(
-                &openai_client,
-                &loaded_documents,
-                "text-embedding-3-small",
-            )
-            .await?;
+            let embedding_model: String = env::var("EMBEDDING_MODEL")
+                .unwrap_or_else(|_| "text-embedding-3-small".to_string());
+            let (generated_embeddings, total_tokens) =
+                generate_embeddings(&openai_client, &loaded_documents, &embedding_model).await?;
 
             let cost_per_million = 0.02;
             let estimated_cost = (total_tokens as f64 / 1_000_000.0) * cost_per_million;
