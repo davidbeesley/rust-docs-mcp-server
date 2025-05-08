@@ -1,10 +1,16 @@
 # CHANGELOG (rust-docs-mcp-server)
 
 
+<a name="v1.3.1"></a>
+## [v1.3.1](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.3.0...v1.3.1)
+
+> 2025-05-07
+
+
 <a name="v1.3.0"></a>
 ## [v1.3.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.2.0...v1.3.0)
 
-> 2025-04-26
+> 2025-05-07
 
 ### Features
 
