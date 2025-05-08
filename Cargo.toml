@@ -1,6 +1,6 @@
 [package]
 name = "rustdocs_mcp_server"
-version = "1.1.0"
+version = "1.3.1"
 edition = "2024"
 
 [dependencies]
@@ -9,7 +9,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 dotenvy = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "1"
+thiserror = "2.0.12"
 walkdir = "2.5.0"
 scraper = "0.23.1"
 ndarray = { version = "0.16.1", features = ["serde"] } # Enable serde feature
@@ -19,7 +19,7 @@ futures = "0.3"
 bincode = { version = "2.0.1", features = ["serde"] } # Enable serde integration
 tiktoken-rs = "0.6.0"
 # Configure cargo crate to vendor openssl to avoid system mismatches
-cargo = { version = "0.86.0", default-features = false, features = ["vendored-openssl"] }
+cargo = { version = "0.87.1", default-features = false, features = ["vendored-openssl"] }
 tempfile = "3.19.1"
 anyhow = "1.0.97"
 schemars = "0.8.22"
