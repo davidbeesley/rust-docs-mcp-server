@@ -1,6 +1,18 @@
 # CHANGELOG (rust-docs-mcp-server)
 
 
+<a name="v1.3.0"></a>
+## [v1.3.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.2.0...v1.3.0)
+
+> 2025-04-26
+
+### Features
+
+* get llm model from env
+* get embedding model from env
+* get api base from env
+
+
 <a name="v1.2.0"></a>
 ## [v1.2.0](https://github.com/Govcraft/rust-docs-mcp-server/compare/v1.1.1...v1.2.0)
 
