@@ -1,31 +1,30 @@
 use crate::{
     doc_loader::Document,
     embeddings::{OPENAI_CLIENT, cosine_similarity},
-    error::ServerError, // Keep ServerError for ::new()
+    error::ServerError,
 };
 use async_openai::{
     types::{
         ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
         CreateChatCompletionRequestArgs, CreateEmbeddingRequestArgs,
     },
-    // Client as OpenAIClient, // Removed unused import
 };
 use ndarray::Array1;
-use rmcp::model::AnnotateAble; // Import trait for .no_annotation()
+use rmcp::model::AnnotateAble;
 use rmcp::{
     Error as McpError,
     Peer,
-    ServerHandler, // Import necessary rmcp items
+    ServerHandler,
     model::{
         CallToolResult,
         Content,
         GetPromptRequestParam,
         GetPromptResult,
-        /* EmptyObject, ErrorCode, */ Implementation,
-        ListPromptsResult, // Removed EmptyObject, ErrorCode
+        Implementation,
+        ListPromptsResult,
         ListResourceTemplatesResult,
         ListResourcesResult,
-        LoggingLevel, // Uncommented ListToolsResult
+        LoggingLevel,
         LoggingMessageNotification,
         LoggingMessageNotificationMethod,
         LoggingMessageNotificationParam,
@@ -33,7 +32,6 @@ use rmcp::{
         PaginatedRequestParam,
         ProtocolVersion,
         RawResource,
-        /* Prompt, PromptArgument, PromptMessage, PromptMessageContent, PromptMessageRole, */ // Removed Prompt types
         ReadResourceRequestParam,
         ReadResourceResult,
         Resource,
@@ -45,10 +43,10 @@ use rmcp::{
     service::{RequestContext, RoleServer},
     tool,
 };
-use schemars::JsonSchema; // Import JsonSchema
-use serde::Deserialize; // Import Deserialize
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::json;
-use std::{/* borrow::Cow, */ env, sync::Arc}; // Removed borrow::Cow
+use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::Mutex;
 
 // --- Argument Struct for the Tool ---
@@ -57,43 +55,71 @@ use tokio::sync::Mutex;
 struct QueryRustDocsArgs {
     #[schemars(description = "The specific question about the crate's API or usage.")]
     question: String,
-    // Removed crate_name field as it's implicit to the server instance
+    
+    #[schemars(description = "Name of the Rust crate to query documentation for.")]
+    crate_name: String,
 }
 
 // --- Main Server Struct ---
 
-// No longer needs ServerState, holds data directly
-#[derive(Clone)] // Add Clone for tool macro requirements
+#[derive(Clone)]
 pub struct RustDocsServer {
-    crate_name: Arc<String>, // Use Arc for cheap cloning
+    // Map of crate names to their documents and embeddings
+    crates: Arc<Mutex<HashMap<String, CrateData>>>,
+    peer: Arc<Mutex<Option<Peer<RoleServer>>>>,
+    startup_message: Arc<Mutex<Option<String>>>,
+    startup_message_sent: Arc<Mutex<bool>>,
+}
+
+// Data structure to hold per-crate information
+#[derive(Clone)]
+pub struct CrateData {
     documents: Arc<Vec<Document>>,
     embeddings: Arc<Vec<(String, Array1<f32>)>>,
-    peer: Arc<Mutex<Option<Peer<RoleServer>>>>, // Uses tokio::sync::Mutex
-    startup_message: Arc<Mutex<Option<String>>>, // Keep the message itself
-    startup_message_sent: Arc<Mutex<bool>>,     // Flag to track if sent (using tokio::sync::Mutex)
-                                                // tool_name and info are handled by ServerHandler/macros now
 }
 
 impl RustDocsServer {
-    // Updated constructor
-    pub fn new(
-        crate_name: String,
-        documents: Vec<Document>,
-        embeddings: Vec<(String, Array1<f32>)>,
-        startup_message: String,
-    ) -> Result<Self, ServerError> {
-        // Keep ServerError for potential future init errors
+    // Updated constructor that doesn't require a specific crate
+    pub fn new(startup_message: String) -> Result<Self, ServerError> {
         Ok(Self {
-            crate_name: Arc::new(crate_name),
-            documents: Arc::new(documents),
-            embeddings: Arc::new(embeddings),
-            peer: Arc::new(Mutex::new(None)), // Uses tokio::sync::Mutex
-            startup_message: Arc::new(Mutex::new(Some(startup_message))), // Initialize message
-            startup_message_sent: Arc::new(Mutex::new(false)), // Initialize flag to false
+            crates: Arc::new(Mutex::new(HashMap::new())),
+            peer: Arc::new(Mutex::new(None)),
+            startup_message: Arc::new(Mutex::new(Some(startup_message))),
+            startup_message_sent: Arc::new(Mutex::new(false)),
         })
     }
 
-    // Helper function to send log messages via MCP notification (remains mostly the same)
+    // Add a new crate to the server
+    pub async fn add_crate(
+        &self,
+        crate_name: String,
+        documents: Vec<Document>,
+        embeddings: Vec<(String, Array1<f32>)>,
+    ) -> Result<(), ServerError> {
+        let crate_data = CrateData {
+            documents: Arc::new(documents),
+            embeddings: Arc::new(embeddings),
+        };
+        
+        let mut crates = self.crates.lock().await;
+        crates.insert(crate_name, crate_data);
+        
+        Ok(())
+    }
+
+    // Check if a crate exists
+    pub async fn has_crate(&self, crate_name: &str) -> bool {
+        let crates = self.crates.lock().await;
+        crates.contains_key(crate_name)
+    }
+
+    // Get list of all crates
+    pub async fn list_crate_names(&self) -> Vec<String> {
+        let crates = self.crates.lock().await;
+        crates.keys().cloned().collect()
+    }
+
+    // Helper function to send log messages via MCP notification
     pub fn send_log(&self, level: LoggingLevel, message: String) {
         let peer_arc = Arc::clone(&self.peer);
         tokio::spawn(async move {
@@ -119,7 +145,7 @@ impl RustDocsServer {
         });
     }
 
-    // Helper for creating simple text resources (like in counter example)
+    // Helper for creating simple text resources
     fn _create_resource_text(&self, uri: &str, name: &str) -> Resource {
         RawResource::new(uri, name.to_string()).no_annotation()
     }
@@ -127,17 +153,14 @@ impl RustDocsServer {
 
 // --- Tool Implementation ---
 
-#[tool(tool_box)] // Add tool_box here as well, mirroring the example
-// Tool methods go in a regular impl block
+#[tool(tool_box)]
 impl RustDocsServer {
-    // Define the tool using the tool macro
-    // Name removed; will be handled dynamically by overriding list_tools/get_tool
     #[tool(
-        description = "Query documentation for a specific Rust crate using semantic search and LLM summarization."
+        description = "Query documentation for a Rust crate using semantic search and LLM summarization."
     )]
     async fn query_rust_docs(
         &self,
-        #[tool(aggr)] // Aggregate arguments into the struct
+        #[tool(aggr)]
         args: QueryRustDocsArgs,
     ) -> Result<CallToolResult, McpError> {
         // --- Send Startup Message (if not already sent) ---
@@ -145,29 +168,38 @@ impl RustDocsServer {
         if !*sent_guard {
             let mut msg_guard = self.startup_message.lock().await;
             if let Some(message) = msg_guard.take() {
-                // Take the message out
                 self.send_log(LoggingLevel::Info, message);
-                *sent_guard = true; // Mark as sent
+                *sent_guard = true;
             }
-            // Drop guards explicitly to avoid holding locks longer than needed
             drop(msg_guard);
             drop(sent_guard);
         } else {
-            // Drop guard if already sent
             drop(sent_guard);
         }
 
-        // Argument validation for crate_name removed
-
         let question = &args.question;
+        let crate_name = &args.crate_name;
+
+        // Validate that we have documentation for this crate
+        let crates = self.crates.lock().await;
+        let crate_data = match crates.get(crate_name) {
+            Some(data) => data.clone(),
+            None => {
+                return Err(McpError::invalid_params(
+                    format!("No documentation available for crate '{}'", crate_name),
+                    Some(json!({ 
+                        "available_crates": crates.keys().cloned().collect::<Vec<String>>(),
+                        "requested_crate": crate_name
+                    })),
+                ));
+            }
+        };
+        drop(crates); // Release lock
 
         // Log received query via MCP
         self.send_log(
             LoggingLevel::Info,
-            format!(
-                "Received query for crate '{}': {}",
-                self.crate_name, question
-            ),
+            format!("Received query for crate '{}': {}", crate_name, question),
         );
 
         // --- Embedding Generation for Question ---
@@ -199,7 +231,7 @@ impl RustDocsServer {
 
         // --- Find Best Matching Document ---
         let mut best_match: Option<(&str, f32)> = None;
-        for (path, doc_embedding) in self.embeddings.iter() {
+        for (path, doc_embedding) in crate_data.embeddings.iter() {
             let score = cosine_similarity(question_vector.view(), doc_embedding.view());
             if best_match.is_none() || score > best_match.unwrap().1 {
                 best_match = Some((path, score));
@@ -210,7 +242,7 @@ impl RustDocsServer {
         let response_text = match best_match {
             Some((best_path, _score)) => {
                 eprintln!("Best match found: {}", best_path);
-                let context_doc = self.documents.iter().find(|doc| doc.path == best_path);
+                let context_doc = crate_data.documents.iter().find(|doc| doc.path == best_path);
 
                 if let Some(doc) = context_doc {
                     let system_prompt = format!(
@@ -218,7 +250,7 @@ impl RustDocsServer {
                          Answer the user's question based *only* on the provided context. \
                          If the context does not contain the answer, say so. \
                          Do not make up information. Be clear, concise, and comprehensive providing example usage code when possible.",
-                        self.crate_name
+                        crate_name
                     );
                     let user_prompt = format!(
                         "Context:\n---\n{}\n---\n\nQuestion: {}",
@@ -278,53 +310,51 @@ impl RustDocsServer {
         // --- Format and Return Result ---
         Ok(CallToolResult::success(vec![Content::text(format!(
             "From {} docs: {}",
-            self.crate_name, response_text
+            crate_name, response_text
         ))]))
     }
 }
 
 // --- ServerHandler Implementation ---
 
-#[tool(tool_box)] // Use imported tool macro directly
+#[tool(tool_box)]
 impl ServerHandler for RustDocsServer {
     fn get_info(&self) -> ServerInfo {
-        // Define capabilities using the builder
+        // Define capabilities
         let capabilities = ServerCapabilities::builder()
-            .enable_tools() // Enable tools capability
-            .enable_logging() // Enable logging capability
-            // Add other capabilities like resources, prompts if needed later
+            .enable_tools()
+            .enable_logging()
             .build();
 
         ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05, // Use latest known version
+            protocol_version: ProtocolVersion::V_2024_11_05,
             capabilities,
             server_info: Implementation {
                 name: "rust-docs-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
-            // Provide instructions based on the specific crate
-            instructions: Some(format!(
-                "This server provides tools to query documentation for the '{}' crate. \
-                 Use the 'query_rust_docs' tool with a specific question to get information \
-                 about its API, usage, and examples, derived from its official documentation.",
-                self.crate_name
-            )),
+            instructions: Some(
+                "This server provides tools to query documentation for Rust crates. \
+                 Use the 'query_rust_docs' tool with a specific question and crate name to get information \
+                 about its API, usage, and examples, derived from its official documentation."
+                .to_string()
+            ),
         }
     }
-
-    // --- Placeholder Implementations for other ServerHandler methods ---
-    // Implement these properly if resource/prompt features are added later.
 
     async fn list_resources(
         &self,
         _request: PaginatedRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        // Example: Return the crate name as a resource
+        // Create a resource for each available crate
+        let crate_names = self.list_crate_names().await;
+        let resources = crate_names.iter()
+            .map(|name| self._create_resource_text(&format!("crate://{}", name), name))
+            .collect();
+
         Ok(ListResourcesResult {
-            resources: vec![
-                self._create_resource_text(&format!("crate://{}", self.crate_name), "crate_name"),
-            ],
+            resources,
             next_cursor: None,
         })
     }
@@ -334,20 +364,19 @@ impl ServerHandler for RustDocsServer {
         request: ReadResourceRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
-        let expected_uri = format!("crate://{}", self.crate_name);
-        if request.uri == expected_uri {
-            Ok(ReadResourceResult {
-                contents: vec![ResourceContents::text(
-                    self.crate_name.as_str(), // Explicitly get &str from Arc<String>
-                    &request.uri,
-                )],
-            })
-        } else {
-            Err(McpError::resource_not_found(
-                format!("Resource URI not found: {}", request.uri),
-                Some(json!({ "uri": request.uri })),
-            ))
+        // Check if it's a crate URI
+        if let Some(crate_name) = request.uri.strip_prefix("crate://") {
+            if self.has_crate(crate_name).await {
+                return Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(crate_name, &request.uri)],
+                });
+            }
         }
+
+        Err(McpError::resource_not_found(
+            format!("Resource URI not found: {}", request.uri),
+            Some(json!({ "uri": request.uri })),
+        ))
     }
 
     async fn list_prompts(
@@ -357,7 +386,7 @@ impl ServerHandler for RustDocsServer {
     ) -> Result<ListPromptsResult, McpError> {
         Ok(ListPromptsResult {
             next_cursor: None,
-            prompts: Vec::new(), // No prompts defined yet
+            prompts: Vec::new(),
         })
     }
 
@@ -367,7 +396,6 @@ impl ServerHandler for RustDocsServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResult, McpError> {
         Err(McpError::invalid_params(
-            // Or prompt_not_found if that exists
             format!("Prompt not found: {}", request.name),
             None,
         ))
@@ -380,7 +408,7 @@ impl ServerHandler for RustDocsServer {
     ) -> Result<ListResourceTemplatesResult, McpError> {
         Ok(ListResourceTemplatesResult {
             next_cursor: None,
-            resource_templates: Vec::new(), // No templates defined yet
+            resource_templates: Vec::new(),
         })
     }
 }

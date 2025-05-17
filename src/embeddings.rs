@@ -4,14 +4,16 @@ use async_openai::{
     Client as OpenAIClient,
 };
 use ndarray::{Array1, ArrayView1};
-use std::sync::OnceLock;
-use std::sync::Arc;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    sync::{Arc, OnceLock}
+};
 use tiktoken_rs::cl100k_base;
 use futures::stream::{self, StreamExt};
 
 // Static OnceLock for the OpenAI client
 pub static OPENAI_CLIENT: OnceLock<OpenAIClient<OpenAIConfig>> = OnceLock::new();
-
 
 use bincode::{Encode, Decode};
 use serde::{Serialize, Deserialize};
@@ -20,8 +22,29 @@ use serde::{Serialize, Deserialize};
 #[derive(Serialize, Deserialize, Debug, Encode, Decode)]
 pub struct CachedDocumentEmbedding {
     pub path: String,
-    pub content: String, // Add the extracted document content
+    pub content: String,
+    pub content_hash: u64,  // Add content hash for version-independent caching
     pub vector: Vec<f32>,
+}
+
+// Compute a content hash for a document
+pub fn compute_content_hash(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    // Normalize whitespace to ensure consistent hashing
+    let normalized = content
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<&str>>()
+        .join("\n");
+    normalized.hash(&mut hasher);
+    hasher.finish()
+}
+
+// Check if cached document content hash matches current content
+pub fn content_hash_matches(cached_doc: &CachedDocumentEmbedding, current_content: &str) -> bool {
+    let current_hash = compute_content_hash(current_content);
+    cached_doc.content_hash == current_hash
 }
 
 
