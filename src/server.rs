@@ -1,4 +1,3 @@
-use rmcp::model::AnnotateAble;
 use crate::{
     crate_discovery::{discover_available_crates, find_matching_crate_names},
     doc_loader::{self, Document},
@@ -14,6 +13,7 @@ use async_openai::{
     },
 };
 use ndarray::Array1;
+use rmcp::model::AnnotateAble;
 use rmcp::model::{LoggingMessageNotification, RawResource};
 use rmcp::{
     Error as McpError, Peer, ServerHandler,
