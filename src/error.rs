@@ -1,6 +1,6 @@
+use crate::doc_loader::DocLoaderError;
 use rmcp::ServiceError; // Assuming ServiceError is the correct top-level error
-use thiserror::Error;
-use crate::doc_loader::DocLoaderError; // Need to import DocLoaderError from the sibling module
+use thiserror::Error; // Need to import DocLoaderError from the sibling module
 
 #[derive(Debug, Error)]
 pub enum ServerError {

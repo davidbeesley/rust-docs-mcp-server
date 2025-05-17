@@ -1,12 +1,12 @@
 use crate::{doc_loader::Document, error::ServerError, fast_hash, global_cache};
 use async_openai::{
-    config::OpenAIConfig, error::ApiError as OpenAIAPIErr, types::CreateEmbeddingRequestArgs,
-    Client as OpenAIClient,
+    Client as OpenAIClient, config::OpenAIConfig, error::ApiError as OpenAIAPIErr,
+    types::CreateEmbeddingRequestArgs,
 };
+use futures::stream::{self, StreamExt};
 use ndarray::{Array1, ArrayView1};
 use std::sync::{Arc, OnceLock};
 use tiktoken_rs::cl100k_base;
-use futures::stream::{self, StreamExt};
 
 // Static OnceLock for the OpenAI client
 pub static OPENAI_CLIENT: OnceLock<OpenAIClient<OpenAIConfig>> = OnceLock::new();
@@ -33,7 +33,6 @@ pub fn store_embedding_by_content(content: &str, embedding: &[f32]) -> Result<()
     global_cache::store_embedding(content, embedding)
 }
 
-
 /// Calculates the cosine similarity between two vectors.
 pub fn cosine_similarity(v1: ArrayView1<f32>, v2: ArrayView1<f32>) -> f32 {
     let dot_product = v1.dot(&v2);
@@ -52,7 +51,8 @@ pub async fn generate_embeddings(
     client: &OpenAIClient<OpenAIConfig>,
     documents: &[Document],
     model: &str,
-) -> Result<(Vec<(String, Array1<f32>)>, usize), ServerError> { // Return tuple: (embeddings, total_tokens)
+) -> Result<(Vec<(String, Array1<f32>)>, usize), ServerError> {
+    // Return tuple: (embeddings, total_tokens)
     // eprintln!("Generating embeddings for {} documents...", documents.len());
 
     // Get the tokenizer for the model and wrap in Arc
@@ -107,7 +107,8 @@ pub async fn generate_embeddings(
                         async_openai::error::OpenAIError::ApiError(OpenAIAPIErr {
                             message: format!(
                                 "Mismatch in response length for document {}. Expected 1, got {}.",
-                                index + 1, response.data.len()
+                                index + 1,
+                                response.data.len()
                             ),
                             r#type: Some("sdk_error".to_string()),
                             param: None,
@@ -148,7 +149,8 @@ pub async fn generate_embeddings(
 
     eprintln!(
         "Finished generating embeddings. Successfully processed {} documents ({} tokens).",
-        embeddings_vec.len(), total_processed_tokens
+        embeddings_vec.len(),
+        total_processed_tokens
     );
     Ok((embeddings_vec, total_processed_tokens)) // Return tuple
 }

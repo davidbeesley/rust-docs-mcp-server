@@ -1,5 +1,9 @@
 use scraper::{Html, Selector};
-use std::{collections::HashMap, fs, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 use walkdir::WalkDir;
 
@@ -31,13 +35,13 @@ pub fn load_documents(
     crate_name: &str,
 ) -> Result<Vec<Document>, DocLoaderError> {
     let mut documents = Vec::new();
-    
+
     // Look for documentation in the target/doc directory
     let target_doc_path = workspace_path.join("target").join("doc");
-    
+
     // Find the specific crate documentation directory
     let crate_doc_path = find_crate_doc_directory(&target_doc_path, crate_name)?;
-    
+
     eprintln!("Using documentation path: {}", crate_doc_path.display());
 
     // Define the CSS selector for the main content area in rustdoc HTML
@@ -54,7 +58,10 @@ pub fn load_documents(
         .map(|e| e.into_path()) // Get the PathBuf
         .collect();
 
-    eprintln!("[DEBUG] Found {} total HTML files initially.", all_html_paths.len());
+    eprintln!(
+        "[DEBUG] Found {} total HTML files initially.",
+        all_html_paths.len()
+    );
 
     // --- Group files by basename ---
     let mut basename_groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
@@ -66,14 +73,17 @@ pub fn load_documents(
                     .or_default()
                     .push(path);
             } else {
-                eprintln!("[WARN] Skipping file with non-UTF8 name: {}", path.display());
+                eprintln!(
+                    "[WARN] Skipping file with non-UTF8 name: {}",
+                    path.display()
+                );
             }
         } else {
             eprintln!("[WARN] Skipping file with no name: {}", path.display());
         }
     }
 
-    // --- Initialize paths_to_process and explicitly add the root index.html if it exists --- 
+    // --- Initialize paths_to_process and explicitly add the root index.html if it exists ---
     let mut paths_to_process: Vec<PathBuf> = Vec::new();
     let root_index_path = crate_doc_path.join("index.html");
     if root_index_path.is_file() {
@@ -88,7 +98,10 @@ pub fn load_documents(
         }
 
         // Also ignore files within source code view directories
-        if paths.first().is_some_and(|p| p.components().any(|comp| comp.as_os_str() == "src")) {
+        if paths
+            .first()
+            .is_some_and(|p| p.components().any(|comp| comp.as_os_str() == "src"))
+        {
             continue;
         }
 
@@ -98,36 +111,47 @@ pub fn load_documents(
         } else {
             // Multiple files with the same basename (duplicates)
             // Find the largest one by file size
-            let largest_path_result: Result<Option<(PathBuf, u64)>, std::io::Error> = paths.into_iter().try_fold(None::<(PathBuf, u64)>, |largest, current| {
-                let current_meta = fs::metadata(&current)?;
-                let current_size = current_meta.len();
-                match largest {
-                    None => Ok(Some((current, current_size))),
-                    Some((largest_path_so_far, largest_size_so_far)) => {
-                        if current_size > largest_size_so_far {
-                            Ok(Some((current, current_size)))
-                        } else {
-                            Ok(Some((largest_path_so_far, largest_size_so_far)))
+            let largest_path_result: Result<Option<(PathBuf, u64)>, std::io::Error> = paths
+                .into_iter()
+                .try_fold(None::<(PathBuf, u64)>, |largest, current| {
+                    let current_meta = fs::metadata(&current)?;
+                    let current_size = current_meta.len();
+                    match largest {
+                        None => Ok(Some((current, current_size))),
+                        Some((largest_path_so_far, largest_size_so_far)) => {
+                            if current_size > largest_size_so_far {
+                                Ok(Some((current, current_size)))
+                            } else {
+                                Ok(Some((largest_path_so_far, largest_size_so_far)))
+                            }
                         }
                     }
-                }
-            });
+                });
 
             match largest_path_result {
                 Ok(Some((p, _size))) => {
                     paths_to_process.push(p);
                 }
                 Ok(None) => {
-                    eprintln!("[WARN] No files found for basename '{}' during size comparison.", basename);
+                    eprintln!(
+                        "[WARN] No files found for basename '{}' during size comparison.",
+                        basename
+                    );
                 }
                 Err(e) => {
-                    eprintln!("[WARN] Error getting metadata for basename '{}', skipping: {}", basename, e);
+                    eprintln!(
+                        "[WARN] Error getting metadata for basename '{}', skipping: {}",
+                        basename, e
+                    );
                 }
             }
         }
     }
 
-    eprintln!("[DEBUG] Filtered down to {} files to process.", paths_to_process.len());
+    eprintln!(
+        "[DEBUG] Filtered down to {} files to process.",
+        paths_to_process.len()
+    );
 
     // --- Process the filtered list of files ---
     for path in paths_to_process {
@@ -162,39 +186,46 @@ pub fn load_documents(
         }
     }
 
-    eprintln!("Finished document loading. Found {} final documents.", documents.len());
+    eprintln!(
+        "Finished document loading. Found {} final documents.",
+        documents.len()
+    );
     Ok(documents)
 }
 
 /// Find the directory containing documentation for a specific crate
-fn find_crate_doc_directory(target_doc_path: &Path, crate_name: &str) -> Result<PathBuf, DocLoaderError> {
+fn find_crate_doc_directory(
+    target_doc_path: &Path,
+    crate_name: &str,
+) -> Result<PathBuf, DocLoaderError> {
     if !target_doc_path.exists() {
         return Err(DocLoaderError::DocNotFound(format!(
-            "Documentation directory not found at {}. Please run cargo doc first.", 
+            "Documentation directory not found at {}. Please run cargo doc first.",
             target_doc_path.display()
         )));
     }
-    
+
     // First try the exact name match
     let exact_path = target_doc_path.join(crate_name);
     if exact_path.is_dir() && exact_path.join("index.html").exists() {
         return Ok(exact_path);
     }
-    
+
     // Try case-insensitive match for crate names
     // Some crates use underscores in the package name but hyphens in the directory
     let normalized_crate_name = crate_name.replace('-', "_");
-    
+
     // Search for directories that might match
     for entry in fs::read_dir(target_doc_path)? {
         let entry = entry?;
         if entry.file_type()?.is_dir() {
             let dir_name = entry.file_name();
             let dir_name_str = dir_name.to_string_lossy().to_string();
-            
+
             // Try both normalized (with underscores) and original name
-            if dir_name_str.eq_ignore_ascii_case(&normalized_crate_name) || 
-               dir_name_str.eq_ignore_ascii_case(crate_name) {
+            if dir_name_str.eq_ignore_ascii_case(&normalized_crate_name)
+                || dir_name_str.eq_ignore_ascii_case(crate_name)
+            {
                 let index_path = entry.path().join("index.html");
                 if index_path.exists() {
                     return Ok(entry.path());
@@ -202,9 +233,10 @@ fn find_crate_doc_directory(target_doc_path: &Path, crate_name: &str) -> Result<
             }
         }
     }
-    
+
     Err(DocLoaderError::DocNotFound(format!(
-        "Documentation for crate '{}' not found in {}. Please run cargo doc first.", 
-        crate_name, target_doc_path.display()
+        "Documentation for crate '{}' not found in {}. Please run cargo doc first.",
+        crate_name,
+        target_doc_path.display()
     )))
 }

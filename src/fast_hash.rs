@@ -9,9 +9,11 @@ pub struct FastHasher {
 impl FastHasher {
     pub fn new() -> Self {
         // FNV-1a initialization value
-        Self { state: 0xcbf29ce484222325 }
+        Self {
+            state: 0xcbf29ce484222325,
+        }
     }
-    
+
     pub fn hash_string(s: &str) -> u64 {
         let mut hasher = Self::new();
         for byte in s.bytes() {
@@ -26,14 +28,14 @@ impl Hasher for FastHasher {
     fn finish(&self) -> u64 {
         self.state
     }
-    
+
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
         for &byte in bytes {
             self.write_u8(byte);
         }
     }
-    
+
     #[inline]
     fn write_u8(&mut self, byte: u8) {
         // FNV-1a algorithm

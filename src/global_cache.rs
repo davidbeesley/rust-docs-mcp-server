@@ -1,7 +1,5 @@
-use crate::{
-    error::ServerError,
-    fast_hash,
-};
+use crate::{error::ServerError, fast_hash};
+use bincode::config;
 use std::{
     collections::HashMap,
     fs,
@@ -9,7 +7,6 @@ use std::{
     path::PathBuf,
     sync::RwLock,
 };
-use bincode::config;
 
 #[cfg(not(target_os = "windows"))]
 use xdg::BaseDirectories;
@@ -34,7 +31,9 @@ fn get_cache_dir() -> Result<PathBuf, ServerError> {
     {
         use dirs;
         let cache_dir = dirs::cache_dir()
-            .ok_or_else(|| ServerError::Config("Could not determine cache directory on Windows".to_string()))?
+            .ok_or_else(|| {
+                ServerError::Config("Could not determine cache directory on Windows".to_string())
+            })?
             .join("rustdocs-mcp-server")
             .join("embeddings-v2");
         fs::create_dir_all(&cache_dir).map_err(ServerError::Io)?;
@@ -46,7 +45,7 @@ fn get_cache_dir() -> Result<PathBuf, ServerError> {
 pub fn get_embedding(document_content: &str) -> Option<Vec<f32>> {
     // First compute the content hash
     let content_hash = fast_hash::compute_content_hash(document_content);
-    
+
     // Check in-memory cache first
     {
         let cache_read = EMBEDDING_CACHE.read().unwrap();
@@ -54,7 +53,7 @@ pub fn get_embedding(document_content: &str) -> Option<Vec<f32>> {
             return Some(embedding.clone());
         }
     }
-    
+
     // If not in memory, try to load from disk
     match get_cache_dir() {
         Ok(cache_dir) => {
@@ -63,22 +62,25 @@ pub fn get_embedding(document_content: &str) -> Option<Vec<f32>> {
                 match fs::File::open(&embedding_path) {
                     Ok(file) => {
                         let reader = BufReader::new(file);
-                        match bincode::decode_from_reader::<Vec<f32>, _, _>(reader, config::standard()) {
+                        match bincode::decode_from_reader::<Vec<f32>, _, _>(
+                            reader,
+                            config::standard(),
+                        ) {
                             Ok(embedding) => {
                                 // Add to in-memory cache
                                 let mut cache_write = EMBEDDING_CACHE.write().unwrap();
                                 cache_write.insert(content_hash, embedding.clone());
                                 Some(embedding)
-                            },
+                            }
                             Err(_) => None,
                         }
-                    },
+                    }
                     Err(_) => None,
                 }
             } else {
                 None
             }
-        },
+        }
         Err(_) => None,
     }
 }
@@ -87,28 +89,30 @@ pub fn get_embedding(document_content: &str) -> Option<Vec<f32>> {
 pub fn store_embedding(document_content: &str, embedding: &[f32]) -> Result<(), ServerError> {
     // First compute the content hash
     let content_hash = fast_hash::compute_content_hash(document_content);
-    
+
     // Store in in-memory cache
     {
         let mut cache_write = EMBEDDING_CACHE.write().unwrap();
         cache_write.insert(content_hash, embedding.to_vec());
     }
-    
+
     // Also store on disk
     let cache_dir = get_cache_dir()?;
     let embedding_path = cache_dir.join(format!("{:016x}.bin", content_hash));
-    
+
     let file = fs::File::create(&embedding_path).map_err(ServerError::Io)?;
     let mut writer = BufWriter::new(file);
-    
+
     bincode::encode_into_std_write(embedding, &mut writer, config::standard())
         .map_err(|e| ServerError::Config(format!("Failed to encode embedding: {}", e)))?;
-    
+
     Ok(())
 }
 
 /// Batch store multiple embeddings
-pub fn store_embeddings_batch(content_embedding_pairs: &[(String, Vec<f32>)]) -> Result<(), ServerError> {
+pub fn store_embeddings_batch(
+    content_embedding_pairs: &[(String, Vec<f32>)],
+) -> Result<(), ServerError> {
     for (content, embedding) in content_embedding_pairs {
         store_embedding(content, embedding)?;
     }

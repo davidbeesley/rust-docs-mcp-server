@@ -1,29 +1,30 @@
 use crate::error::ServerError;
-use std::{
-    collections::HashSet,
-    fs,
-    path::Path,
-};
+use std::{collections::HashSet, fs, path::Path};
 
 /// Discovers available crates in the target/doc directory
 pub fn discover_available_crates(target_doc_path: &Path) -> Result<Vec<String>, ServerError> {
     let mut crates = HashSet::new();
-    
+
     // If path doesn't exist, return empty list
     if !target_doc_path.exists() {
         return Ok(Vec::new());
     }
-    
+
     // Read the target/doc directory
-    let entries = fs::read_dir(target_doc_path)
-        .map_err(|e| ServerError::Config(format!("Failed to read directory {}: {}", 
-            target_doc_path.display(), e)))?;
-    
+    let entries = fs::read_dir(target_doc_path).map_err(|e| {
+        ServerError::Config(format!(
+            "Failed to read directory {}: {}",
+            target_doc_path.display(),
+            e
+        ))
+    })?;
+
     // Process each entry
     for entry in entries {
-        let entry = entry.map_err(|e| ServerError::Config(format!("Failed to read directory entry: {}", e)))?;
+        let entry = entry
+            .map_err(|e| ServerError::Config(format!("Failed to read directory entry: {}", e)))?;
         let path = entry.path();
-        
+
         // Only consider directories
         if path.is_dir() {
             // Check if this is a crate directory (contains index.html)
@@ -37,11 +38,11 @@ pub fn discover_available_crates(target_doc_path: &Path) -> Result<Vec<String>, 
             }
         }
     }
-    
+
     // Convert HashSet to Vec and sort
     let mut crate_list: Vec<String> = crates.into_iter().collect();
     crate_list.sort();
-    
+
     Ok(crate_list)
 }
 
@@ -62,15 +63,18 @@ pub fn canonical_crate_name(name: &str) -> String {
 pub fn find_matching_crate_names(crate_name: &str, available_crates: &[String]) -> Vec<String> {
     let normalized_name = normalize_crate_name(crate_name);
     let with_hyphens = normalized_name.replace('_', "-");
-    
-    available_crates.iter()
+
+    available_crates
+        .iter()
         .filter(|&c| {
             let c_lower = c.to_lowercase();
             let normalized_lower = normalized_name.to_lowercase();
             let hyphen_lower = with_hyphens.to_lowercase();
-            
-            c_lower == normalized_lower || c_lower == hyphen_lower ||
-            c_lower.contains(&normalized_lower) || normalized_lower.contains(&c_lower)
+
+            c_lower == normalized_lower
+                || c_lower == hyphen_lower
+                || c_lower.contains(&normalized_lower)
+                || normalized_lower.contains(&c_lower)
         })
         .cloned()
         .collect()
