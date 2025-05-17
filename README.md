@@ -16,39 +16,37 @@ lack knowledge of the latest APIs, leading to incorrect or outdated code
 suggestions.
 
 This MCP server addresses this challenge by providing a focused, up-to-date
-knowledge source for a specific Rust crate. By running an instance of this
-server for a crate (e.g., `serde`, `tokio`, `reqwest`), you give your LLM coding
-assistant a tool (`query_rust_docs`) it can use _before_ writing code related to
-that crate.
+knowledge source for Rust crates. It intelligently discovers and lazily loads
+documentation from your local Rust project, giving your LLM coding assistant a
+tool (`query_rust_docs`) it can use _before_ writing code related to any crate
+in your project.
 
-When instructed to use this tool, the LLM can ask specific questions about the
+When instructed to use this tool, the LLM can ask specific questions about a
 crate's API or usage and receive answers derived directly from the _current_
 documentation. This significantly improves the accuracy and relevance of the
 generated code, reducing the need for manual correction and speeding up
 development.
 
-Multiple instances of this server can be run concurrently, allowing the LLM
-assistant to access documentation for several different crates during a coding
-session.
-
-This server fetches the documentation for a specified Rust crate, generates
-embeddings for the content, and provides an MCP tool to answer questions about
-the crate based on the documentation context.
-
 ## Features
 
-- **Targeted Documentation:** Focuses on a single Rust crate per server
-  instance.
+- **Automatic Crate Discovery:** Intelligently finds and provides documentation for
+  all crates in your local Rust project's generated documentation.
+- **Lazy Loading:** Only loads documentation and generates embeddings for a crate
+  when it's first queried, saving time and resources.
+- **On-Demand Documentation Generation:** Can automatically generate documentation
+  even if the main project code doesn't compile (using `--generate-docs` flag).
+- **Multiple Crate Support:** Run a single server instance to provide documentation for
+  multiple Rust crates simultaneously.
 - **Feature Support:** Allows specifying required crate features for
   documentation generation.
 - **Semantic Search:** Uses OpenAI's `text-embedding-3-small` model to find the
   most relevant documentation sections for a given question.
 - **LLM Summarization:** Leverages OpenAI's `gpt-4o-mini-2024-07-18` model to
   generate concise answers based _only_ on the retrieved documentation context.
-- **Caching:** Caches generated documentation content and embeddings in the
-  user's XDG data directory (`~/.local/share/rustdocs-mcp-server/` or similar)
-  based on crate, version, _and_ requested features to speed up subsequent
-  launches.
+- **Advanced Caching:** Uses a two-tier caching system:
+  - **Traditional Cache:** Stores crate-specific embeddings in the user's data directory  
+  - **Global Content Hash Cache:** Cross-project embedding reuse based solely on content hash, 
+    avoiding redundant OpenAI API calls for identical content regardless of project
 - **MCP Integration:** Runs as a standard MCP server over stdio, exposing tools
   and resources.
 
@@ -99,37 +97,57 @@ It is recommended to run the server once directly from your command line for any
 
 ### Running the Server
 
-The server is launched from the command line and requires the **Package ID
-Specification** for the target crate. This specification follows the format used
-by Cargo (e.g., `crate_name`, `crate_name@version_req`). For the full
-specification details, see `man cargo-pkgid` or the
-[Cargo documentation](https://doc.rust-lang.org/cargo/reference/pkgid-spec.html).
+#### Basic Usage - Automatic Mode
 
-Optionally, you can specify required crate features using the `-F` or
-`--features` flag, followed by a comma-separated list of features. This is
-necessary for crates that require specific features to be enabled for
-`cargo doc` to succeed (e.g., crates requiring a runtime feature like
-`async-stripe`).
+The simplest way to use the server is to run it in your Rust project directory with no arguments:
 
 ```bash
 # Set the API key (replace with your actual key)
 export OPENAI_API_KEY="sk-..."
 
-# Example: Run server for the latest 1.x version of serde
-rustdocs_mcp_server "serde@^1.0"
-
-# Example: Run server for a specific version of reqwest
-rustdocs_mcp_server "reqwest@0.12.0"
-
-# Example: Run server for the latest version of tokio
-rustdocs_mcp_server tokio
-
-# Example: Run server for async-stripe, enabling a required runtime feature
-rustdocs_mcp_server "async-stripe@0.40" -F runtime-tokio-hyper-rustls
-
-# Example: Run server for another crate with multiple features
-rustdocs_mcp_server "some-crate@1.2" --features feat1,feat2
+# Run server in automatic discovery mode with lazy loading (in your project directory)
+rustdocs_mcp_server
 ```
+
+In this mode, the server will:
+
+1. Look for documentation in the `target/doc` directory
+2. Discover all available crates
+3. Lazily load documentation for each crate as it's first queried
+
+#### Advanced Options
+
+You can also run the server with various options:
+
+```bash
+# Generate documentation if it doesn't exist, even if the project doesn't compile
+rustdocs_mcp_server --generate-docs
+
+# Preload all available crates at startup (disable lazy loading)
+rustdocs_mcp_server --preload
+
+# Preload specific crates at startup, others will be lazily loaded
+rustdocs_mcp_server tokio,serde,reqwest
+
+# Preload only specific crates and disable lazy loading for others
+rustdocs_mcp_server --preload tokio,serde,reqwest
+
+# Run with specific features enabled for all crates
+rustdocs_mcp_server -F full,compat
+
+# Combine options
+rustdocs_mcp_server tokio,hyper -F full,http2 --generate-docs
+
+# Specify a different workspace path
+rustdocs_mcp_server -w /path/to/your/project
+```
+
+The behavior of the `--preload` flag and crate name arguments works as follows:
+
+1. **Default (no arguments)**: Lazy loading enabled, crates loaded on first query
+2. **With crate names only**: Named crates preloaded at startup, other crates lazy loaded
+3. **With --preload only**: All available crates preloaded, lazy loading disabled
+4. **With both --preload and crate names**: Only named crates preloaded, lazy loading disabled
 
 On the first run for a specific crate version _and feature set_, the server
 will:
@@ -154,8 +172,9 @@ The server communicates using the Model Context Protocol over standard
 input/output (stdio). It exposes the following:
 
 - **Tool: `query_rust_docs`**
-  - **Description:** Query documentation for the specific Rust crate the server
-    was started for, using semantic search and LLM summarization.
+  - **Description:** Query documentation for any available Rust crate using
+    semantic search and LLM summarization. The first time you query a crate,
+    it will be automatically loaded and cached.
   - **Input Schema:**
     ```json
     {
@@ -164,9 +183,13 @@ input/output (stdio). It exposes the following:
         "question": {
           "type": "string",
           "description": "The specific question about the crate's API or usage."
+        },
+        "crate_name": {
+          "type": "string",
+          "description": "Name of the Rust crate to query documentation for."
         }
       },
-      "required": ["question"]
+      "required": ["question", "crate_name"]
     }
     ```
   - **Output:** A text response containing the answer generated by the LLM based
@@ -180,15 +203,17 @@ input/output (stdio). It exposes the following:
       "params": {
         "tool_name": "query_rust_docs",
         "arguments": {
-          "question": "How do I make a simple GET request with reqwest?"
+          "question": "How do I make a simple GET request with reqwest?",
+          "crate_name": "reqwest"
         }
       },
       "id": 1
     }
     ```
+  - **Error Handling:** If the requested crate isn't found, the server will suggest similar crates that are available.
 
 - **Resource: `crate://<crate_name>`**
-  - **Description:** Provides the name of the Rust crate this server instance is
+  - **Description:** Provides the name of each Rust crate this server instance is
     configured for.
   - **URI:** `crate://<crate_name>` (e.g., `crate://serde`, `crate://reqwest`)
   - **Content:** Plain text containing the crate name.
@@ -198,18 +223,16 @@ input/output (stdio). It exposes the following:
 
 ### Example Client Configuration (Roo Code)
 
-You can configure MCP clients like Roo Code to run multiple instances of this
-server, each targeting a different crate. Here's an example snippet for Roo
-Code's `mcp_settings.json` file, configuring servers for `reqwest` and
-`async-stripe` (note the added features argument for `async-stripe`):
+You can configure MCP clients like Roo Code to run this server for multiple crates. Here's an example snippet for Roo
+Code's `mcp_settings.json` file:
 
 ```json
 {
   "mcpServers": {
-    "rust-docs-reqwest": {
+    "rust-docs": {
       "command": "/path/to/your/rustdocs_mcp_server",
       "args": [
-        "reqwest@0.12"
+        "reqwest@0.12,tokio,serde_json"
       ],
       "env": {
         "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY_HERE"
@@ -222,7 +245,7 @@ Code's `mcp_settings.json` file, configuring servers for `reqwest` and
       "args": [
         "async-stripe@0.40",
         "-F",
-        " runtime-tokio-hyper-rustls"
+        "runtime-tokio-hyper-rustls"
       ],
       "env": {
         "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY_HERE"
@@ -239,24 +262,24 @@ Code's `mcp_settings.json` file, configuring servers for `reqwest` and
 - Replace `/path/to/your/rustdocs_mcp_server` with the actual path to the
   compiled binary on your system if it isn't in your PATH.
 - Replace `YOUR_OPENAI_API_KEY_HERE` with your actual OpenAI API key.
-- The keys (`rust-docs-reqwest`, `rust-docs-async-stripe`) are arbitrary names
+- The keys (`rust-docs`, `rust-docs-async-stripe`) are arbitrary names
   you choose to identify the server instances within Roo Code.
 
 ### Example Client Configuration (Claude Desktop)
 
 For Claude Desktop users, you can configure the server in the MCP settings.
-Here's an example configuring servers for `serde` and `async-stripe`:
+Here's an example configuration:
 
 ```json
 {
   "mcpServers": {
-    "rust-docs-serde": {
+    "rust-docs": {
       "command": "/path/to/your/rustdocs_mcp_server",
       "args": [
-        "serde@^1.0"
+        "serde@^1.0,tokio,reqwest"
       ]
     },
-    "rust-docs-async-stripe-rt": {
+    "rust-docs-async-stripe": {
       "command": "rustdocs_mcp_server",
       "args": [
         "async-stripe@0.40",
@@ -272,7 +295,7 @@ Here's an example configuring servers for `serde` and `async-stripe`:
 
 - Ensure `rustdocs_mcp_server` is in your system's PATH or provide the full path
   (e.g., `/path/to/your/rustdocs_mcp_server`).
-- The keys (`rust-docs-serde`, `rust-docs-async-stripe-rt`) are arbitrary names
+- The keys (`rust-docs`, `rust-docs-async-stripe`) are arbitrary names
   you choose to identify the server instances.
 - Remember to set the `OPENAI_API_KEY` environment variable where Claude Desktop
   can access it (this might be system-wide or via how you launch Claude
@@ -283,23 +306,36 @@ Here's an example configuring servers for `serde` and `async-stripe`:
 
 ### Caching
 
-- **Location:** Cached documentation and embeddings are stored in the XDG data
-  directory, typically under
-  `~/.local/share/rustdocs-mcp-server/<crate_name>/<sanitized_version_req>/<features_hash>/embeddings.bin`.
-  The `sanitized_version_req` is derived from the version requirement, and
-  `features_hash` is a hash representing the specific combination of features
-  requested at startup. This ensures different feature sets are cached
-  separately.
-- **Format:** Data is cached using `bincode` serialization.
-- **Regeneration:** If the cache file is missing, corrupted, or cannot be
-  decoded, the server will automatically regenerate the documentation and
-  embeddings.
+The server uses a highly efficient two-tier caching system to minimize OpenAI API costs:
+
+#### Global Content Hash Cache
+
+- **Location:** `~/.local/share/rustdocs-mcp-server/embeddings-v2/` (Linux/macOS) or equivalent on Windows
+- **Strategy:** Content-addressed storage where each file is named by the content hash
+- **Benefits:**
+  - Cross-project reuse - embeddings are valid across any projects
+  - Immune to version/feature changes - only content matters
+  - In-memory cache for frequently used embeddings
+  - Fast FNV-1a hashing algorithm for efficiency
+  
+#### Traditional Per-Crate Cache (Legacy Support)
+
+- **Location:** `~/.local/share/rustdocs-mcp-server/<crate_name>/<features_hash>/embeddings.bin`
+- **Purpose:** Provides compatibility with existing installations
+
+#### Smart Regeneration
+
+The server is intelligent about embedding generation:
+- Checks global cache first
+- Falls back to traditional cache  
+- Only generates embeddings for content not found in either cache
+- Automatically stores new embeddings in both caches
 
 ## How it Works
 
-1. **Initialization:** Parses the crate specification and optional features from
+1. **Initialization:** Parses the crate specifications and optional features from
    the command line using `clap`.
-2. **Cache Check:** Looks for a pre-existing cache file for the specific crate,
+2. **Cache Check:** Looks for a pre-existing cache file for each specific crate,
    version requirement, and feature set.
 3. **Documentation Generation (if cache miss):**
    - Creates a temporary Rust project depending only on the target crate,
@@ -319,13 +355,16 @@ Here's an example configuring servers for `serde` and `async-stripe`:
 6. **Caching (if cache miss):** Saves the extracted document content and their
    corresponding embeddings to the cache file (path includes features hash)
    using `bincode`.
-7. **Server Startup:** Initializes the `RustDocsServer` with the
-   loaded/generated documents and embeddings.
+7. **Server Startup:** Initializes the `RustDocsServer` with automatic crate discovery
+   and lazy loading capabilities.
 8. **MCP Serving:** Starts the MCP server using `rmcp` over stdio.
 9. **Query Handling (`query_rust_docs` tool):**
+   - Checks if the requested crate is already loaded into the server.
+   - If not loaded and lazy loading is enabled, attempts to load it automatically.
+   - If the crate isn't found, suggests similar crates that are available.
    - Generates an embedding for the user's question.
    - Calculates the cosine similarity between the question embedding and all
-     cached document embeddings.
+     cached document embeddings for the specified crate.
    - Identifies the document chunk with the highest similarity.
    - Sends the user's question and the content of the best-matching document
      chunk to the `gpt-4o-mini-2024-07-18` model via the OpenAI API.

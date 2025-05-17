@@ -3873,6 +3873,7 @@ dependencies = [
  "dirs",
  "dotenvy",
  "futures",
+ "lazy_static",
  "ndarray",
  "rmcp",
  "schemars",

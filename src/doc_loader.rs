@@ -29,7 +29,6 @@ pub struct Document {
 pub fn load_documents(
     workspace_path: &Path,
     crate_name: &str,
-    _features: Option<&Vec<String>>, // Unused for now but kept for future compatibility
 ) -> Result<Vec<Document>, DocLoaderError> {
     let mut documents = Vec::new();
     

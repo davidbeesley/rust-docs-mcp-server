@@ -1,41 +1,36 @@
 // Declare modules
+mod crate_discovery;
+mod doc_generator;
 mod doc_loader;
 mod embeddings;
 mod error;
+mod fast_hash;
+mod global_cache;
 mod server;
 
 // Use necessary items from modules and crates
 use crate::{
     doc_loader::Document,
-    embeddings::{generate_embeddings, CachedDocumentEmbedding, OPENAI_CLIENT},
+    doc_generator::generate_docs_for_deps,
+    embeddings::{generate_embeddings, OPENAI_CLIENT},
     error::ServerError,
     server::RustDocsServer,
 };
 use async_openai::{Client as OpenAIClient, config::OpenAIConfig};
-use bincode::config;
 use clap::Parser;
 use ndarray::Array1;
 use rmcp::{transport::io::stdio, ServiceExt};
 use std::{
-    collections::hash_map::DefaultHasher,
     env,
-    fs::{self, File},
-    hash::{Hash, Hasher},
-    io::BufReader,
+    fs,
     path::{Path, PathBuf},
 };
-#[cfg(not(target_os = "windows"))]
-use xdg::BaseDirectories;
 
 // --- CLI Argument Parsing ---
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Crate names to load documentation for.
-    #[arg(value_delimiter = ',')]
-    crate_names: Vec<String>,
-
     /// Path to workspace root directory (where target/doc is located)
     #[arg(short = 'w', long, default_value = ".")]
     workspace_path: PathBuf,
@@ -43,115 +38,25 @@ struct Cli {
     /// Optional features enabled when the documentation was generated.
     #[arg(short = 'F', long, value_delimiter = ',', num_args = 0..)]
     features: Option<Vec<String>>,
+
+    /// Generate documentation even if target/doc doesn't exist
+    #[arg(short = 'g', long)]
+    generate_docs: bool,
+
+    /// Disable lazy loading for crates not explicitly named (only preloaded crates will be available)
+    #[arg(short = 'p', long)]
+    preload: bool,
+
+    /// Crate names to preload documentation for at startup
+    /// If specified without --preload: These crates will be preloaded, others lazily loaded when needed
+    /// If specified with --preload: Only these crates will be available (others cannot be loaded)
+    /// If not specified with --preload: All available crates will be preloaded
+    #[arg(value_delimiter = ',')]
+    crate_names: Vec<String>,
 }
 
-// Helper function to create a stable hash from features
-fn hash_features(features: &Option<Vec<String>>) -> String {
-    features
-        .as_ref()
-        .map(|f| {
-            let mut sorted_features = f.clone();
-            sorted_features.sort_unstable(); // Sort for consistent hashing
-            let mut hasher = DefaultHasher::new();
-            sorted_features.hash(&mut hasher);
-            format!("{:x}", hasher.finish()) // Return hex representation of hash
-        })
-        .unwrap_or_else(|| "no_features".to_string())
-}
-
-// Cache file path helper
-fn get_cache_file_path(crate_name: &str, features_hash: &str) -> Result<PathBuf, ServerError> {
-    let embeddings_relative_path = PathBuf::from(crate_name)
-        .join(features_hash)
-        .join("embeddings.bin");
-
-    #[cfg(not(target_os = "windows"))]
-    let embeddings_file_path = {
-        let xdg_dirs = BaseDirectories::with_prefix("rustdocs-mcp-server")
-            .map_err(|e| ServerError::Xdg(format!("Failed to get XDG directories: {}", e)))?;
-        xdg_dirs
-            .place_data_file(embeddings_relative_path)
-            .map_err(ServerError::Io)?
-    };
-
-    #[cfg(target_os = "windows")]
-    let embeddings_file_path = {
-        let cache_dir = dirs::cache_dir().ok_or_else(|| {
-            ServerError::Config("Could not determine cache directory on Windows".to_string())
-        })?;
-        let app_cache_dir = cache_dir.join("rustdocs-mcp-server");
-        fs::create_dir_all(&app_cache_dir).map_err(ServerError::Io)?;
-        app_cache_dir.join(embeddings_relative_path)
-    };
-
-    Ok(embeddings_file_path)
-}
-
-// Helper to save embeddings to cache file
-fn save_embeddings_to_cache(
-    cache_file_path: &Path,
-    documents: &[Document],
-    embeddings: &[(String, Array1<f32>)]
-) -> Result<(), ServerError> {
-    // Create a map for easy lookup of embeddings by path
-    let embedding_map: std::collections::HashMap<&String, &Array1<f32>> =
-        embeddings.iter().map(|(path, embedding)| (path, embedding)).collect();
-    
-    // Create cache entries with content hashes
-    let mut combined_cache_data: Vec<CachedDocumentEmbedding> = Vec::new();
-    
-    for doc in documents {
-        if let Some(embedding_array) = embedding_map.get(&doc.path) {
-            // Compute content hash for version-independent caching
-            let content_hash = embeddings::compute_content_hash(&doc.content);
-            
-            combined_cache_data.push(CachedDocumentEmbedding {
-                path: doc.path.clone(),
-                content: doc.content.clone(),
-                content_hash,
-                vector: embedding_array.to_vec(),
-            });
-        } else {
-            eprintln!(
-                "Warning: Embedding not found for document path: {}. Skipping from cache.",
-                doc.path
-            );
-        }
-    }
-    
-    // Ensure parent directory exists
-    if let Some(parent_dir) = cache_file_path.parent() {
-        if !parent_dir.exists() {
-            if let Err(e) = fs::create_dir_all(parent_dir) {
-                eprintln!(
-                    "Warning: Failed to create cache directory {}: {}",
-                    parent_dir.display(), e
-                );
-                return Err(ServerError::Io(e));
-            }
-        }
-    }
-    
-    // Write cache file
-    match bincode::encode_to_vec(&combined_cache_data, config::standard()) {
-        Ok(encoded_bytes) => {
-            if let Err(e) = fs::write(cache_file_path, encoded_bytes) {
-                eprintln!("Warning: Failed to write cache file: {}", e);
-                return Err(ServerError::Io(e));
-            }
-            
-            eprintln!(
-                "Cache saved successfully ({} items).",
-                combined_cache_data.len()
-            );
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Warning: Failed to encode data for cache: {}", e);
-            Err(ServerError::Config(format!("Failed to encode cache data: {}", e)))
-        }
-    }
-}
+// No legacy caching functions needed anymore since we're using content-based caching
+// The old functions for hash_features, get_cache_file_path and save_embeddings_to_cache have been removed
 
 // Load or generate embeddings for a single crate
 async fn load_or_generate_embeddings(
@@ -160,140 +65,73 @@ async fn load_or_generate_embeddings(
     features: &Option<Vec<String>>,
     openai_client: &OpenAIClient<OpenAIConfig>,
 ) -> Result<(Vec<Document>, Vec<(String, Array1<f32>)>, bool, Option<usize>, Option<f64>), ServerError> {
-    // Generate a stable hash for the features
-    let features_hash = hash_features(features);
-    let cache_file_path = get_cache_file_path(crate_name, &features_hash)?;
-    
-    eprintln!("Cache file path for {}: {:?}", crate_name, cache_file_path);
-    
     // Always load the current documentation first
     eprintln!("Loading docs for crate: {} (Features: {:?})", crate_name, features);
-    let loaded_documents = doc_loader::load_documents(workspace_path, crate_name, features.as_ref())?;
+    let loaded_documents = doc_loader::load_documents(workspace_path, crate_name)?;
     eprintln!("Loaded {} documents for {}.", loaded_documents.len(), crate_name);
     
-    // Try loading embeddings from cache
-    if cache_file_path.exists() {
-        eprintln!("Attempting to load cached embeddings for {} from: {:?}", crate_name, cache_file_path);
-        match File::open(&cache_file_path) {
-            Ok(file) => {
-                let reader = BufReader::new(file);
-                match bincode::decode_from_reader::<Vec<CachedDocumentEmbedding>, _, _>(
-                    reader,
-                    config::standard(),
-                ) {
-                    Ok(cached_data) => {
-                        eprintln!(
-                            "Successfully loaded {} items from cache for {}.",
-                            cached_data.len(), crate_name
-                        );
-                        
-                        // Create a map of document paths to documents for easy lookup
-                        let doc_map: std::collections::HashMap<String, &Document> = 
-                            loaded_documents.iter().map(|doc| (doc.path.clone(), doc)).collect();
-                        
-                        // Check which documents can reuse cached embeddings and which need regeneration
-                        let mut embeddings = Vec::new();
-                        let mut documents_needing_embedding = Vec::new();
-                        let mut reused_count = 0;
-                        
-                        // Create a set of paths for quick lookups
-                        let mut cached_paths = std::collections::HashSet::new();
-                        
-                        // Process cached items first
-                        for cached_item in &cached_data {
-                            cached_paths.insert(cached_item.path.clone());
-                            
-                            // Check if this document still exists and content hash matches
-                            if let Some(current_doc) = doc_map.get(&cached_item.path) {
-                                if embeddings::content_hash_matches(cached_item, &current_doc.content) {
-                                    // Content hash matches, reuse embedding
-                                    embeddings.push((cached_item.path.clone(), Array1::from(cached_item.vector.clone())));
-                                    reused_count += 1;
-                                } else {
-                                    // Content changed, needs new embedding
-                                    documents_needing_embedding.push((*current_doc).clone());
-                                }
-                            }
-                            // If document no longer exists, skip it
-                        }
-                        
-                        // Add any new documents that weren't in the cache
-                        for doc in &loaded_documents {
-                            if !cached_paths.contains(&doc.path) {
-                                documents_needing_embedding.push(doc.clone());
-                            }
-                        }
-                        
-                        eprintln!(
-                            "Reusing {} cached embeddings, regenerating {} that changed or are new.",
-                            reused_count, documents_needing_embedding.len()
-                        );
-                        
-                        // If all documents can reuse embeddings, return early
-                        if documents_needing_embedding.is_empty() {
-                            return Ok((loaded_documents, embeddings, true, None, None));
-                        }
-                        
-                        // Otherwise, continue with partial regeneration
-                        if !documents_needing_embedding.is_empty() {
-                            eprintln!("Generating embeddings for {} documents that changed or are new...", 
-                                documents_needing_embedding.len());
-                            
-                            // Generate embeddings only for changed documents
-                            let embedding_model: String = env::var("EMBEDDING_MODEL")
-                                .unwrap_or_else(|_| "text-embedding-3-small".to_string());
-                            
-                            let (new_embeddings, tokens_used) = 
-                                generate_embeddings(openai_client, &documents_needing_embedding, &embedding_model).await?;
-                            
-                            // Merge with reused embeddings
-                            embeddings.extend(new_embeddings);
-                            
-                            // Calculate cost for the new embeddings
-                            let cost_per_million = 0.02;
-                            let estimated_cost = (tokens_used as f64 / 1_000_000.0) * cost_per_million;
-                            
-                            // We need to save the updated cache with all embeddings
-                            eprintln!("Saving updated cache with merged embeddings...");
-                            save_embeddings_to_cache(&cache_file_path, &loaded_documents, &embeddings)?;
-                            
-                            return Ok((loaded_documents, embeddings, false, Some(tokens_used), Some(estimated_cost)));
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to decode cache file for {}: {}. Will regenerate all embeddings.", crate_name, e);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to open cache file for {}: {}. Will regenerate all embeddings.", crate_name, e);
-            }
+    // Prepare storage for embeddings
+    let mut embeddings = Vec::new();
+    let mut documents_needing_embedding = Vec::new();
+    let mut reused_count = 0;
+    
+    // Try to get embeddings from global content hash cache
+    for doc in &loaded_documents {
+        // Get document embedding from the global cache
+        if let Some(embedding_vec) = embeddings::get_embedding_by_content(&doc.content) {
+            // Found in global cache - reuse
+            embeddings.push((doc.path.clone(), Array1::from(embedding_vec)));
+            reused_count += 1;
+        } else {
+            // Not found in cache - needs embedding
+            documents_needing_embedding.push(doc.clone());
         }
-    } else {
-        eprintln!("Cache file not found for {}. Will generate all embeddings.", crate_name);
     }
     
-    // Generate embeddings for all documents
+    eprintln!(
+        "Reusing {} cached embeddings, generating {} new embeddings.",
+        reused_count, documents_needing_embedding.len()
+    );
+    
+    // If all documents have cached embeddings, return early
+    if documents_needing_embedding.is_empty() {
+        return Ok((loaded_documents, embeddings, true, None, None));
+    }
+    
+    // Generate embeddings for documents not in cache
     let embedding_model: String = env::var("EMBEDDING_MODEL")
         .unwrap_or_else(|_| "text-embedding-3-small".to_string());
     
-    eprintln!("Generating embeddings for {} documents...", loaded_documents.len());
-    let (generated_embeddings, total_tokens) =
-        generate_embeddings(openai_client, &loaded_documents, &embedding_model).await?;
+    eprintln!("Generating embeddings for {} documents...", documents_needing_embedding.len());
+    let (new_embeddings, total_tokens) =
+        generate_embeddings(openai_client, &documents_needing_embedding, &embedding_model).await?;
     
-    // Calculate cost
-    let cost_per_million = 0.02; // Cost per million tokens for the embedding model
+    // Store new embeddings in global cache
+    eprintln!("Storing {} new embeddings in global cache...", new_embeddings.len());
+    for (i, (_path, embedding)) in new_embeddings.iter().enumerate() {
+        if let Some(doc) = documents_needing_embedding.get(i) {
+            // Store in global cache
+            if let Err(e) = embeddings::store_embedding_by_content(
+                &doc.content,
+                &embedding.to_vec(),
+            ) {
+                eprintln!("Warning: Failed to store in global cache: {}", e);
+            }
+        }
+    }
+    
+    // Calculate cost for the new embeddings
+    let cost_per_million = 0.02;
     let estimated_cost = (total_tokens as f64 / 1_000_000.0) * cost_per_million;
     eprintln!(
         "Embedding generation cost for {} ({} tokens): ${:.6}",
         crate_name, total_tokens, estimated_cost
     );
     
-    // Save to cache
-    eprintln!("Saving generated embeddings for {} to cache.", crate_name);
-    save_embeddings_to_cache(&cache_file_path, &loaded_documents, &generated_embeddings)?;
+    // Merge with reused embeddings
+    embeddings.extend(new_embeddings);
     
-    Ok((loaded_documents, generated_embeddings, false, Some(total_tokens), Some(estimated_cost)))
+    Ok((loaded_documents, embeddings, false, Some(total_tokens), Some(estimated_cost)))
 }
 
 #[tokio::main]
@@ -304,11 +142,12 @@ async fn main() -> Result<(), ServerError> {
     // Parse CLI Arguments
     let cli = Cli::parse();
     
-    if cli.crate_names.is_empty() {
-        return Err(ServerError::Config("At least one crate name must be specified.".to_string()));
+    // If crate names are provided, we'll preload them. Otherwise, we'll use lazy loading
+    if !cli.crate_names.is_empty() {
+        eprintln!("Crates to preload: {:?}, Features: {:?}", cli.crate_names, cli.features);
+    } else {
+        eprintln!("No crates specified for preloading. Will use lazy loading. Features: {:?}", cli.features);
     }
-    
-    eprintln!("Crates to load: {:?}, Features: {:?}", cli.crate_names, cli.features);
     
     // Get absolute path for workspace
     let workspace_path = fs::canonicalize(&cli.workspace_path).map_err(|e| {
@@ -320,13 +159,29 @@ async fn main() -> Result<(), ServerError> {
     
     eprintln!("Using workspace path: {}", workspace_path.display());
     
-    // Check if target/doc exists
+    // Check if target/doc exists, generate if needed
     let target_doc_path = workspace_path.join("target").join("doc");
+    
     if !target_doc_path.exists() {
-        return Err(ServerError::Config(format!(
-            "Documentation directory not found at {}. Please run cargo doc before starting the server.",
-            target_doc_path.display()
-        )));
+        if cli.generate_docs {
+            eprintln!("Documentation directory not found. Generating docs using Cargo.toml...");
+            let cargo_toml_path = workspace_path.join("Cargo.toml");
+            if !cargo_toml_path.exists() {
+                return Err(ServerError::Config(format!(
+                    "Cargo.toml not found at {}. Cannot generate documentation.",
+                    cargo_toml_path.display()
+                )));
+            }
+            
+            // Generate docs
+            let doc_path = generate_docs_for_deps(&cargo_toml_path, &cli.features)?;
+            eprintln!("Documentation generated at: {}", doc_path.display());
+        } else {
+            return Err(ServerError::Config(format!(
+                "Documentation directory not found at {}. Please run cargo doc before starting the server or use --generate-docs to generate documentation.",
+                target_doc_path.display()
+            )));
+        }
     }
     
     // Initialize OpenAI Client
@@ -345,18 +200,68 @@ async fn main() -> Result<(), ServerError> {
         .set(openai_client.clone())
         .expect("Failed to set OpenAI client");
     
-    // Initialize the server
-    let startup_message = format!(
-        "Rust Docs MCP Server initialized with {} crates. Use the query_rust_docs tool to query documentation.",
-        cli.crate_names.len()
-    );
+    // By default, lazy loading is enabled unless preload flag is set
+    let enable_lazy_loading = !cli.preload;
     
-    let service = RustDocsServer::new(startup_message)?;
+    // If specific crates were named, we'll preload just those
+    // If preload flag is set with no specific crates, we'll load all available crates
+    let config_info = if enable_lazy_loading && cli.crate_names.is_empty() {
+        "Rust Docs MCP Server initialized with lazy loading enabled. Use the query_rust_docs tool to query documentation.".to_string()
+    } else if !cli.crate_names.is_empty() {
+        format!(
+            "Rust Docs MCP Server initialized with {} specified crates preloaded. Use the query_rust_docs tool to query documentation.",
+            cli.crate_names.len()
+        )
+    } else {
+        "Rust Docs MCP Server initialized with all available crates preloaded. Use the query_rust_docs tool to query documentation.".to_string()
+    };
     
-    // Process each crate
-    for crate_name in &cli.crate_names {
+    // Create server with the workspace path and lazy loading settings
+    let service = RustDocsServer::new(
+        config_info,
+        workspace_path.clone(),
+        cli.features.clone(),
+        enable_lazy_loading,
+    )?;
+    
+    // Determine which crates to preload
+    let target_doc_path = workspace_path.join("target").join("doc");
+    let crates_to_preload = if !cli.crate_names.is_empty() {
+        // Preload only specific crates
+        cli.crate_names.clone()
+    } else if cli.preload {
+        // Preload all available crates
+        match crate_discovery::discover_available_crates(&target_doc_path) {
+            Ok(crates) => {
+                eprintln!("Found {} crates available to preload: {:?}", crates.len(), crates);
+                crates
+            },
+            Err(e) => {
+                eprintln!("Error discovering crates: {}", e);
+                Vec::new()
+            }
+        }
+    } else {
+        // No preloading, just log available crates
+        eprintln!("Using lazy loading. Will load crates as they are requested.");
+        
+        // Log available crates in target/doc
+        match crate_discovery::discover_available_crates(&target_doc_path) {
+            Ok(crates) => {
+                eprintln!("Found {} crates available in {}: {:?}", 
+                    crates.len(), target_doc_path.display(), crates);
+            },
+            Err(e) => {
+                eprintln!("Error discovering crates: {}", e);
+            }
+        }
+        Vec::new()
+    };
+    
+    // Preload crates if needed
+    for crate_name in &crates_to_preload {
         let trimmed_name = crate_name.trim();
-        eprintln!("Processing crate: {}", trimmed_name);
+        eprintln!("Preloading crate: {}", trimmed_name);
         
         // Load or generate embeddings for this crate
         let (documents, embeddings, loaded_from_cache, tokens, cost) = 
@@ -374,10 +279,10 @@ async fn main() -> Result<(), ServerError> {
         
         // Log status
         if loaded_from_cache {
-            eprintln!("Added crate '{}' from cache with {} documents.", 
+            eprintln!("Preloaded crate '{}' from cache with {} documents.", 
                 trimmed_name, documents_len);
         } else {
-            eprintln!("Added crate '{}' with {} documents. Generated {} embeddings for {} tokens (Est. Cost: ${:.6}).", 
+            eprintln!("Preloaded crate '{}' with {} documents. Generated {} embeddings for {} tokens (Est. Cost: ${:.6}).", 
                 trimmed_name, documents_len, embeddings_len, tokens.unwrap_or(0), cost.unwrap_or(0.0));
         }
     }
@@ -385,6 +290,7 @@ async fn main() -> Result<(), ServerError> {
     // Start MCP server
     eprintln!("Rust Docs MCP server starting on stdio...");
     
+    // Use Arc::new on the service
     let server_handle = service.serve(stdio()).await.map_err(|e| {
         eprintln!("Failed to start server: {:?}", e);
         ServerError::McpRuntime(e.to_string())

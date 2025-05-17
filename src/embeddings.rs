@@ -1,50 +1,36 @@
-use crate::{doc_loader::Document, error::ServerError};
+use crate::{doc_loader::Document, error::ServerError, fast_hash, global_cache};
 use async_openai::{
     config::OpenAIConfig, error::ApiError as OpenAIAPIErr, types::CreateEmbeddingRequestArgs,
     Client as OpenAIClient,
 };
 use ndarray::{Array1, ArrayView1};
-use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-    sync::{Arc, OnceLock}
-};
+use std::sync::{Arc, OnceLock};
 use tiktoken_rs::cl100k_base;
 use futures::stream::{self, StreamExt};
 
 // Static OnceLock for the OpenAI client
 pub static OPENAI_CLIENT: OnceLock<OpenAIClient<OpenAIConfig>> = OnceLock::new();
 
-use bincode::{Encode, Decode};
-use serde::{Serialize, Deserialize};
-
-// Define a struct containing path, content, and embedding for caching
-#[derive(Serialize, Deserialize, Debug, Encode, Decode)]
-pub struct CachedDocumentEmbedding {
+// Simple struct for path + embedding without legacy caching support
+#[derive(Debug, Clone)]
+pub struct DocumentEmbedding {
     pub path: String,
-    pub content: String,
-    pub content_hash: u64,  // Add content hash for version-independent caching
-    pub vector: Vec<f32>,
+    pub vector: Array1<f32>,
 }
 
 // Compute a content hash for a document
 pub fn compute_content_hash(content: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    // Normalize whitespace to ensure consistent hashing
-    let normalized = content
-        .lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<&str>>()
-        .join("\n");
-    normalized.hash(&mut hasher);
-    hasher.finish()
+    fast_hash::compute_content_hash(content)
 }
 
-// Check if cached document content hash matches current content
-pub fn content_hash_matches(cached_doc: &CachedDocumentEmbedding, current_content: &str) -> bool {
-    let current_hash = compute_content_hash(current_content);
-    cached_doc.content_hash == current_hash
+// Get embedding for a document by content
+pub fn get_embedding_by_content(content: &str) -> Option<Vec<f32>> {
+    global_cache::get_embedding(content)
+}
+
+// Store embedding for a document by content
+pub fn store_embedding_by_content(content: &str, embedding: &[f32]) -> Result<(), ServerError> {
+    global_cache::store_embedding(content, embedding)
 }
 
 
