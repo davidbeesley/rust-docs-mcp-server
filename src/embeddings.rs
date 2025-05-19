@@ -105,107 +105,102 @@ pub fn embedding_similarity(e1: &Embedding, e2: &Embedding) -> EmbeddingResult<f
     Ok(cosine_similarity(v1.view(), v2.view()))
 }
 
+/// Process a single document to create its embedding vector
+async fn generate_single_embedding(
+    client: &OpenAIClient<OpenAIConfig>,
+    doc: &Document,
+    model: &str,
+    index: usize,
+    bpe: &Arc<tiktoken_rs::CoreBPE>,
+) -> EmbeddingResult<Option<(String, Embedding, usize)>> {
+    // Calculate token count for this document
+    let token_count = bpe.encode_with_special_tokens(&doc.content).len();
+
+    const TOKEN_LIMIT: usize = 8000; // Keep a buffer below the 8192 limit
+    if token_count > TOKEN_LIMIT {
+        // Skip documents that exceed token limit
+        return Ok(None);
+    }
+
+    // Prepare input for this single document
+    let inputs: Vec<String> = vec![doc.content.clone()];
+
+    let request = CreateEmbeddingRequestArgs::default()
+        .model(model)
+        .input(inputs)
+        .build()?;
+
+    let response = client.embeddings().create(request).await?;
+
+    if response.data.len() != 1 {
+        return Err(ServerError::OpenAI(
+            async_openai::error::OpenAIError::ApiError(OpenAIAPIErr {
+                message: format!(
+                    "Mismatch in response length for document {}. Expected 1, got {}.",
+                    index + 1, response.data.len()
+                ),
+                r#type: Some("sdk_error".to_string()),
+                param: None,
+                code: None,
+            }),
+        ));
+    }
+
+    // Process result
+    let embedding_data = response.data.first().unwrap(); // Safe unwrap due to check above
+    let vector = embedding_data.embedding.clone();
+    
+    // Create an Embedding struct
+    let embedding = Embedding::new(
+        vector,
+        EmbeddingProvider::OpenAI,
+        model.to_string(),
+    );
+    
+    // Return result with path, embedding, and token count
+    Ok(Some((doc.path.clone(), embedding, token_count)))
+}
+
 /// Generates embeddings for a list of documents using the OpenAI API.
 pub async fn generate_embeddings(
     client: &OpenAIClient<OpenAIConfig>,
     documents: &[Document],
     model: &str,
 ) -> EmbeddingResult<(Vec<(String, Embedding)>, usize)> { // Return tuple: (embeddings, total_tokens)
-    // eprintln!("Generating embeddings for {} documents...", documents.len());
-
     // Get the tokenizer for the model and wrap in Arc
     let bpe = Arc::new(cl100k_base().map_err(|e| ServerError::Tiktoken(e.to_string()))?);
 
     const CONCURRENCY_LIMIT: usize = 8; // Number of concurrent requests
-    const TOKEN_LIMIT: usize = 8000; // Keep a buffer below the 8192 limit
 
+    // Process documents in parallel with concurrency limit
     let results = stream::iter(documents.iter().enumerate())
         .map(|(index, doc)| {
-            // Clone client, model, doc, and Arc<BPE> for the async block
+            // Clone client and model for the async block
             let client = client.clone();
             let model = model.to_string();
             let doc = doc.clone();
-            let bpe = Arc::clone(&bpe); // Clone the Arc pointer
+            let bpe = Arc::clone(&bpe);
 
             async move {
-                // Calculate token count for this document
-                let token_count = bpe.encode_with_special_tokens(&doc.content).len();
-
-                if token_count > TOKEN_LIMIT {
-                    // eprintln!(
-                    //     "    Skipping document {}: Actual tokens ({}) exceed limit ({}). Path: {}",
-                    //     index + 1,
-                    //     token_count,
-                    //     TOKEN_LIMIT,
-                    //     doc.path
-                    // );
-                    // Return Ok(None) to indicate skipping, with 0 tokens processed for this doc
-                    return Ok::<Option<(String, Embedding, usize)>, ServerError>(None);
-                }
-
-                // Prepare input for this single document
-                let inputs: Vec<String> = vec![doc.content.clone()];
-
-                let request = CreateEmbeddingRequestArgs::default()
-                    .model(&model) // Use cloned model string
-                    .input(inputs)
-                    .build()?; // Propagates OpenAIError
-
-                // eprintln!(
-                //     "    Sending request for document {} ({} tokens)... Path: {}",
-                //     index + 1,
-                //     token_count, // Use correct variable name
-                //     doc.path
-                // );
-                let response = client.embeddings().create(request).await?; // Propagates OpenAIError
-                // eprintln!("    Received response for document {}.", index + 1);
-
-                if response.data.len() != 1 {
-                    return Err(ServerError::OpenAI(
-                        async_openai::error::OpenAIError::ApiError(OpenAIAPIErr {
-                            message: format!(
-                                "Mismatch in response length for document {}. Expected 1, got {}.",
-                                index + 1, response.data.len()
-                            ),
-                            r#type: Some("sdk_error".to_string()),
-                            param: None,
-                            code: None,
-                        }),
-                    ));
-                }
-
-                // Process result
-                let embedding_data = response.data.first().unwrap(); // Safe unwrap due to check above
-                let vector = embedding_data.embedding.clone();
-                
-                // Create an Embedding struct
-                let embedding = Embedding::new(
-                    vector,
-                    EmbeddingProvider::OpenAI,
-                    model.clone(),
-                );
-                
-                // Return Ok(Some(...)) for successful embedding, include token count
-                Ok(Some((doc.path.clone(), embedding, token_count))) 
+                generate_single_embedding(&client, &doc, &model, index, &bpe).await
             }
         })
-        .buffer_unordered(CONCURRENCY_LIMIT) // Run up to CONCURRENCY_LIMIT futures concurrently
-        .collect::<Vec<Result<Option<(String, Embedding, usize)>, ServerError>>>()
+        .buffer_unordered(CONCURRENCY_LIMIT)
+        .collect::<Vec<EmbeddingResult<Option<(String, Embedding, usize)>>>>()
         .await;
 
-    // Process collected results, filtering out errors and skipped documents, summing tokens
+    // Process collected results, filtering out errors and skipped documents
     let mut embeddings_vec = Vec::new();
     let mut total_processed_tokens: usize = 0;
+    
     for result in results {
         match result {
             Ok(Some((path, embedding, tokens))) => {
-                embeddings_vec.push((path, embedding)); // Keep successful embeddings
-                total_processed_tokens += tokens; // Add tokens for successful ones
+                embeddings_vec.push((path, embedding));
+                total_processed_tokens += tokens;
             }
-            Ok(None) => {} // Ignore skipped documents
+            Ok(None) => {}, // Skip documents that exceeded token limit
             Err(e) => {
-                // Log error but potentially continue? Or return the first error?
-                // For now, let's return the first error encountered.
                 eprintln!("Error during concurrent embedding generation: {}", e);
                 return Err(e);
             }
@@ -216,5 +211,6 @@ pub async fn generate_embeddings(
         "Finished generating embeddings. Successfully processed {} documents ({} tokens).",
         embeddings_vec.len(), total_processed_tokens
     );
-    Ok((embeddings_vec, total_processed_tokens)) // Return tuple
+    
+    Ok((embeddings_vec, total_processed_tokens))
 }

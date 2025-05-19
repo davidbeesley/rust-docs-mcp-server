@@ -65,20 +65,18 @@ impl DocumentChunker {
         }
     }
 
-    /// Splits a document into content-defined chunks
-    pub fn chunk_document(&self, document: &str) -> Vec<Chunk> {
-        let mut chunks = Vec::new();
-        let bytes = document.as_bytes();
-        
-        // Return early if document is smaller than minimum chunk size
-        if bytes.len() <= self.min_chunk_size {
-            chunks.push(Chunk {
-                id: self.generate_chunk_id(document),
-                content: document.to_string(),
-            });
-            return chunks;
+    /// Creates a new chunk with content and ID
+    fn create_chunk(&self, content: &str) -> Chunk {
+        Chunk {
+            id: self.generate_chunk_id(content),
+            content: content.to_string(),
         }
-        
+    }
+    
+    /// Process document for chunk boundaries using rolling hash
+    fn find_chunk_boundaries(&self, document: &str) -> Vec<usize> {
+        let bytes = document.as_bytes();
+        let mut boundaries = Vec::new();
         let mut start_idx = 0;
         let mut i = 0;
         let mut rolling_hash: u32 = 0;
@@ -95,11 +93,7 @@ impl DocumentChunker {
             
             // Forced break at maximum chunk size
             if i - start_idx >= self.max_chunk_size {
-                let chunk_content = &document[start_idx..i];
-                chunks.push(Chunk {
-                    id: self.generate_chunk_id(chunk_content),
-                    content: chunk_content.to_string(),
-                });
+                boundaries.push(i);
                 start_idx = i;
                 rolling_hash = 0;
                 continue;
@@ -108,23 +102,43 @@ impl DocumentChunker {
             // Check if rolling hash matches chunk boundary pattern
             // We use a bit mask to create breakpoints with a certain probability
             if (rolling_hash & CHUNK_MASK) == 0 || (i - start_idx >= self.target_chunk_size) {
-                let chunk_content = &document[start_idx..i];
-                chunks.push(Chunk {
-                    id: self.generate_chunk_id(chunk_content),
-                    content: chunk_content.to_string(),
-                });
+                boundaries.push(i);
                 start_idx = i;
                 rolling_hash = 0;
             }
         }
         
-        // Add the final chunk if there's content remaining
-        if start_idx < bytes.len() {
-            let chunk_content = &document[start_idx..];
-            chunks.push(Chunk {
-                id: self.generate_chunk_id(chunk_content),
-                content: chunk_content.to_string(),
-            });
+        // Add the end of document if not already included
+        if !boundaries.is_empty() && boundaries[boundaries.len() - 1] != bytes.len() {
+            boundaries.push(bytes.len());
+        }
+        
+        boundaries
+    }
+
+    /// Splits a document into content-defined chunks
+    pub fn chunk_document(&self, document: &str) -> Vec<Chunk> {
+        // Handle small documents that don't need chunking
+        if document.len() <= self.min_chunk_size {
+            return vec![self.create_chunk(document)];
+        }
+        
+        // Find all chunk boundaries
+        let boundaries = self.find_chunk_boundaries(document);
+        
+        // No boundaries found, just return the whole document
+        if boundaries.is_empty() {
+            return vec![self.create_chunk(document)];
+        }
+        
+        // Create chunks from the boundaries
+        let mut chunks = Vec::with_capacity(boundaries.len());
+        let mut start_idx = 0;
+        
+        for boundary in boundaries {
+            let chunk_content = &document[start_idx..boundary];
+            chunks.push(self.create_chunk(chunk_content));
+            start_idx = boundary;
         }
         
         chunks
