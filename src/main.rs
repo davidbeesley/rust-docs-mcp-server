@@ -19,7 +19,7 @@ use rmcp::{
     ServiceExt,           // Import the ServiceExt trait for .serve() and .waiting()
     transport::io::stdio, // Use the standard stdio transport
 };
-use std::{env, hash::Hasher};
+use std::env;
 
 // --- CLI Argument Parsing ---
 

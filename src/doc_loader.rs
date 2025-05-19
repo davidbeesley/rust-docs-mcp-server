@@ -1,8 +1,7 @@
 use scraper::{Html, Selector};
 use std::{
     collections::HashMap,
-    fs::{self},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
 };
 

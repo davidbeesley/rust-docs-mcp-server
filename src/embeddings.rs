@@ -98,3 +98,25 @@ pub fn embedding_similarity(e1: &Embedding, e2: &Embedding) -> EmbeddingResult<f
 
     Ok(cosine_similarity(v1.view(), v2.view()))
 }
+
+/// Test helper for initializing OpenAI client
+pub fn init_test_client() -> Result<(), &'static str> {
+    let client = OpenAIClient::new();
+    OPENAI_CLIENT.set(client).map_err(|_| "Failed to set OpenAI client")
+}
+
+/// Test helper for setting the embedding model
+pub struct TestConfig {
+    pub embedding_model: String,
+    pub llm_model: String,
+}
+
+/// Default test configuration values
+impl Default for TestConfig {
+    fn default() -> Self {
+        Self {
+            embedding_model: "text-embedding-3-small".to_string(),
+            llm_model: "gpt-4o-mini-2024-07-18".to_string(),
+        }
+    }
+}

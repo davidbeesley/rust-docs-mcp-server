@@ -23,7 +23,8 @@ pub enum ServerError {
     #[error("MCP Runtime Error: {0}")]
     McpRuntime(String),
 
-    // These variants are used in utility functions
+    // This variant is needed by the with_context utility function
+    #[allow(dead_code)]
     #[error("Configuration Error: {0}")]
     Config(String),
 
