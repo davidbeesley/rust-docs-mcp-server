@@ -9,7 +9,7 @@ pub type Result<T> = std::result::Result<T, ServerError>;
 pub enum ServerError {
     #[error("Environment variable not set: {0}")]
     MissingEnvVar(String),
-    
+
     #[error("MCP Service Error: {0}")]
     Mcp(#[from] ServiceError),
     #[error("IO Error: {0}")]
@@ -22,11 +22,11 @@ pub enum ServerError {
     Json(#[from] serde_json::Error),
     #[error("MCP Runtime Error: {0}")]
     McpRuntime(String),
-    
+
     // These variants are used in utility functions
     #[error("Configuration Error: {0}")]
     Config(String),
-    
+
     // Embedding related errors
     #[error("Embedding Dimension Mismatch: expected {expected}, got {actual}")]
     EmbeddingDimensionMismatch { expected: usize, actual: usize },

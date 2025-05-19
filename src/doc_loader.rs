@@ -1,17 +1,12 @@
-use cargo::core::resolver::features::CliFeatures;
 use scraper::{Html, Selector};
 use std::{
     collections::HashMap,
-    fs::{self, File},
+    fs::{self},
     io::Write,
     path::{Path, PathBuf},
 };
 
 use anyhow::Error as AnyhowError;
-use cargo::core::Workspace;
-use cargo::ops::{self, CompileOptions, DocOptions, Packages};
-use cargo::util::context::GlobalContext;
-use tempfile::tempdir;
 use thiserror::Error;
 use walkdir::WalkDir;
 
@@ -202,7 +197,6 @@ fn process_html_documents(
 
     Ok(documents)
 }
-
 
 /// Loads documentation for a crate from the local cargo doc output directory.
 /// Extracts text content from the main content area of rustdoc generated HTML.

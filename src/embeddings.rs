@@ -1,13 +1,7 @@
-use crate::{doc_loader::Document, error::ServerError};
-use async_openai::{
-    Client as OpenAIClient, config::OpenAIConfig, error::ApiError as OpenAIAPIErr,
-    types::CreateEmbeddingRequestArgs,
-};
-use futures::stream::{self, StreamExt};
+use crate::error::ServerError;
+use async_openai::{Client as OpenAIClient, config::OpenAIConfig};
 use ndarray::{Array1, ArrayView1};
-use std::sync::Arc;
 use std::sync::OnceLock;
-use tiktoken_rs::cl100k_base;
 
 // Static OnceLock for the OpenAI client
 pub static OPENAI_CLIENT: OnceLock<OpenAIClient<OpenAIConfig>> = OnceLock::new();
@@ -104,4 +98,3 @@ pub fn embedding_similarity(e1: &Embedding, e2: &Embedding) -> EmbeddingResult<f
 
     Ok(cosine_similarity(v1.view(), v2.view()))
 }
-

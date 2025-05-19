@@ -11,11 +11,7 @@ mod server;
 mod tests;
 
 // Use necessary items from modules and crates
-use crate::{
-    embeddings::OPENAI_CLIENT,
-    error::ServerError,
-    server::RustDocsServer,
-};
+use crate::{embeddings::OPENAI_CLIENT, error::ServerError, server::RustDocsServer};
 use async_openai::{Client as OpenAIClient, config::OpenAIConfig};
 use clap::Parser;
 // Import rmcp items needed for the new approach
@@ -23,11 +19,7 @@ use rmcp::{
     ServiceExt,           // Import the ServiceExt trait for .serve() and .waiting()
     transport::io::stdio, // Use the standard stdio transport
 };
-use std::{
-    collections::hash_map::DefaultHasher,
-    env,
-    hash::{Hash, Hasher},
-};
+use std::{env, hash::Hasher};
 
 // --- CLI Argument Parsing ---
 
