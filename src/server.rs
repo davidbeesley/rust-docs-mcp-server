@@ -57,8 +57,8 @@ use tokio::sync::Mutex;
 struct QueryRustDocsArgs {
     #[schemars(description = "The specific question about the crate's API or usage.")]
     question: String,
-    #[schemars(description = "Optional crate name to load documentation from (uses locally generated docs). If not provided, uses the server's configured crate.")]
-    crate_name: Option<String>,
+    #[schemars(description = "The crate name to load documentation from (uses locally generated docs).")]
+    crate_name: String,
 }
 
 // --- Main Server Struct ---
@@ -66,9 +66,6 @@ struct QueryRustDocsArgs {
 // No longer needs ServerState, holds data directly
 #[derive(Clone)] // Add Clone for tool macro requirements
 pub struct RustDocsServer {
-    crate_name: Arc<String>, // Use Arc for cheap cloning
-    documents: Arc<Vec<Document>>,
-    embeddings: Arc<Vec<(String, Embedding)>>,
     embedding_cache_service: Arc<EmbeddingCacheService>, // Embedding cache service
     peer: Arc<Mutex<Option<Peer<RoleServer>>>>, // Uses tokio::sync::Mutex
     startup_message: Arc<Mutex<Option<String>>>, // Keep the message itself
@@ -77,11 +74,8 @@ pub struct RustDocsServer {
 }
 
 impl RustDocsServer {
-    // Updated constructor
+    // Updated constructor - simplified to only initialize cache service and messaging
     pub fn new(
-        crate_name: String,
-        documents: Vec<Document>,
-        embeddings: Vec<(String, Embedding)>,
         startup_message: String,
     ) -> Result<Self, ServerError> {
         // Get OpenAI API key from environment
@@ -93,9 +87,6 @@ impl RustDocsServer {
         
         // Keep ServerError for potential future init errors
         Ok(Self {
-            crate_name: Arc::new(crate_name),
-            documents: Arc::new(documents),
-            embeddings: Arc::new(embeddings),
             embedding_cache_service: Arc::new(embedding_cache_service),
             peer: Arc::new(Mutex::new(None)), // Uses tokio::sync::Mutex
             startup_message: Arc::new(Mutex::new(Some(startup_message))), // Initialize message
@@ -129,9 +120,41 @@ impl RustDocsServer {
         });
     }
 
-    // Helper for creating simple text resources (like in counter example)
+    // Helper for creating simple text resources
     fn _create_resource_text(&self, uri: &str, name: &str) -> Resource {
         RawResource::new(uri, name.to_string()).no_annotation()
+    }
+    
+    // Find all available crates in the cargo doc directory
+    fn get_available_crates(&self) -> Vec<String> {
+        let target_doc_path = std::path::Path::new("./target/doc");
+        
+        // If the doc directory doesn't exist, return empty list
+        if !target_doc_path.exists() || !target_doc_path.is_dir() {
+            return Vec::new();
+        }
+        
+        // Read the directory and collect crate names
+        match std::fs::read_dir(target_doc_path) {
+            Ok(entries) => {
+                entries
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+                    .filter_map(|entry| {
+                        // Check if this directory has an index.html file (indicating a proper doc dir)
+                        let path = entry.path();
+                        let has_index = path.join("index.html").exists();
+                        
+                        if has_index {
+                            entry.file_name().to_str().map(String::from)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            },
+            Err(_) => Vec::new(),
+        }
     }
 }
 
@@ -302,14 +325,10 @@ impl RustDocsServer {
         self.try_send_startup_message().await;
 
         let question = &args.question;
+        let crate_name = &args.crate_name;
         
-        // Get crate docs and embeddings (either from custom crate or server's configured crate)
-        let (crate_name, documents, embeddings) = if let Some(custom_crate) = &args.crate_name {
-            self.load_custom_crate_docs(custom_crate).await?
-        } else {
-            // Use the server's configured crate
-            (self.crate_name.to_string(), self.documents.as_ref().clone(), self.embeddings.as_ref().clone())
-        };
+        // Load documentation and embeddings for the specified crate
+        let (crate_name, documents, embeddings) = self.load_custom_crate_docs(crate_name).await?;
 
         // Log received query via MCP
         self.send_log(
@@ -365,15 +384,13 @@ impl ServerHandler for RustDocsServer {
                 name: "rust-docs-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
-            // Provide instructions based on the specific crate
-            instructions: Some(format!(
-                "This server provides tools to query documentation for the '{}' crate. \
-                 Use the 'query_rust_docs' tool with a specific question to get information \
-                 about its API, usage, and examples, derived from its official documentation. \
-                 You can optionally specify a different crate name with the 'crate_name' parameter \
-                 to query locally generated documentation (run 'cargo doc --package <crate_name>' first).",
-                self.crate_name
-            )),
+            // Provide instructions for using the server
+            instructions: Some(
+                "This server provides tools to query Rust crate documentation. \
+                 Use the 'query_rust_docs' tool with a specific question and crate name to get information \
+                 about the crate's API, usage, and examples, derived from its official documentation. \
+                 The crate documentation must be locally generated first using 'cargo doc --package <crate_name>'.".to_string()
+            ),
         }
     }
 
@@ -385,11 +402,17 @@ impl ServerHandler for RustDocsServer {
         _request: PaginatedRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        // Example: Return the crate name as a resource
+        // Get all available crates from the cargo doc directory
+        let available_crates = self.get_available_crates();
+        
+        // Create resources for each available crate
+        let resources = available_crates
+            .iter()
+            .map(|crate_name| self._create_resource_text(&format!("crate://{}", crate_name), crate_name))
+            .collect();
+            
         Ok(ListResourcesResult {
-            resources: vec![
-                self._create_resource_text(&format!("crate://{}", self.crate_name), "crate_name"),
-            ],
+            resources,
             next_cursor: None,
         })
     }
@@ -399,17 +422,27 @@ impl ServerHandler for RustDocsServer {
         request: ReadResourceRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
-        let expected_uri = format!("crate://{}", self.crate_name);
-        if request.uri == expected_uri {
-            Ok(ReadResourceResult {
-                contents: vec![ResourceContents::text(
-                    self.crate_name.as_str(), // Explicitly get &str from Arc<String>
-                    &request.uri,
-                )],
-            })
+        // Check if the URI matches our crate URI format
+        if let Some(crate_name) = request.uri.strip_prefix("crate://") {
+            // Check if this crate's documentation exists
+            let available_crates = self.get_available_crates();
+            
+            if available_crates.contains(&crate_name.to_string()) {
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(
+                        crate_name,
+                        &request.uri,
+                    )],
+                })
+            } else {
+                Err(McpError::resource_not_found(
+                    format!("Crate documentation not found: {}. Run 'cargo doc --package {}' first.", crate_name, crate_name),
+                    Some(json!({ "uri": request.uri })),
+                ))
+            }
         } else {
             Err(McpError::resource_not_found(
-                format!("Resource URI not found: {}", request.uri),
+                format!("Invalid resource URI format: {}", request.uri),
                 Some(json!({ "uri": request.uri })),
             ))
         }
