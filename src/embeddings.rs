@@ -12,17 +12,68 @@ use futures::stream::{self, StreamExt};
 // Static OnceLock for the OpenAI client
 pub static OPENAI_CLIENT: OnceLock<OpenAIClient<OpenAIConfig>> = OnceLock::new();
 
-
 use bincode::{Encode, Decode};
 use serde::{Serialize, Deserialize};
+use std::fmt;
+
+/// Represents supported embedding providers
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+pub enum EmbeddingProvider {
+    OpenAI,
+    ONNX,
+    // Can be extended with other providers
+}
+
+impl fmt::Display for EmbeddingProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EmbeddingProvider::OpenAI => write!(f, "OpenAI"),
+            EmbeddingProvider::ONNX => write!(f, "ONNX"),
+        }
+    }
+}
+
+/// Represents an embedding vector with metadata
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct Embedding {
+    /// The actual embedding vector values
+    pub values: Vec<f32>,
+    /// Which provider generated this embedding
+    pub provider: EmbeddingProvider,
+    /// The model used to generate this embedding
+    pub model: String,
+    /// Dimension of the embedding vector
+    pub dimensions: usize,
+}
+
+impl Embedding {
+    /// Creates a new Embedding instance
+    pub fn new(vector: Vec<f32>, provider: EmbeddingProvider, model: String) -> Self {
+        let dimensions = vector.len();
+        Self {
+            values: vector,
+            provider,
+            model,
+            dimensions,
+        }
+    }
+    
+    /// Converts the embedding to an ndarray::Array1 for numerical operations
+    pub fn to_array(&self) -> Array1<f32> {
+        Array1::from(self.values.clone())
+    }
+}
 
 // Define a struct containing path, content, and embedding for caching
 #[derive(Serialize, Deserialize, Debug, Encode, Decode)]
 pub struct CachedDocumentEmbedding {
     pub path: String,
-    pub content: String, // Add the extracted document content
-    pub vector: Vec<f32>,
+    pub content: String, // The extracted document content
+    pub vector: Vec<f32>, // Keep this as 'vector' for backward compatibility with main.rs
 }
+
+/// Result type specific to embedding operations
+pub type EmbeddingResult<T> = Result<T, crate::error::ServerError>;
 
 
 /// Calculates the cosine similarity between two vectors.
@@ -38,12 +89,28 @@ pub fn cosine_similarity(v1: ArrayView1<f32>, v2: ArrayView1<f32>) -> f32 {
     }
 }
 
+/// Calculates the cosine similarity between two Embedding instances.
+/// Returns an error if the embeddings have different dimensions.
+pub fn embedding_similarity(e1: &Embedding, e2: &Embedding) -> EmbeddingResult<f32> {
+    if e1.dimensions != e2.dimensions {
+        return Err(ServerError::EmbeddingDimensionMismatch {
+            expected: e1.dimensions,
+            actual: e2.dimensions,
+        });
+    }
+    
+    let v1 = e1.to_array();
+    let v2 = e2.to_array();
+    
+    Ok(cosine_similarity(v1.view(), v2.view()))
+}
+
 /// Generates embeddings for a list of documents using the OpenAI API.
 pub async fn generate_embeddings(
     client: &OpenAIClient<OpenAIConfig>,
     documents: &[Document],
     model: &str,
-) -> Result<(Vec<(String, Array1<f32>)>, usize), ServerError> { // Return tuple: (embeddings, total_tokens)
+) -> EmbeddingResult<(Vec<(String, Embedding)>, usize)> { // Return tuple: (embeddings, total_tokens)
     // eprintln!("Generating embeddings for {} documents...", documents.len());
 
     // Get the tokenizer for the model and wrap in Arc
@@ -73,7 +140,7 @@ pub async fn generate_embeddings(
                     //     doc.path
                     // );
                     // Return Ok(None) to indicate skipping, with 0 tokens processed for this doc
-                    return Ok::<Option<(String, Array1<f32>, usize)>, ServerError>(None); // Include token count type
+                    return Ok::<Option<(String, Embedding, usize)>, ServerError>(None);
                 }
 
                 // Prepare input for this single document
@@ -109,13 +176,21 @@ pub async fn generate_embeddings(
 
                 // Process result
                 let embedding_data = response.data.first().unwrap(); // Safe unwrap due to check above
-                let embedding_array = Array1::from(embedding_data.embedding.clone());
+                let vector = embedding_data.embedding.clone();
+                
+                // Create an Embedding struct
+                let embedding = Embedding::new(
+                    vector,
+                    EmbeddingProvider::OpenAI,
+                    model.clone(),
+                );
+                
                 // Return Ok(Some(...)) for successful embedding, include token count
-                Ok(Some((doc.path.clone(), embedding_array, token_count))) // Include token count
+                Ok(Some((doc.path.clone(), embedding, token_count))) 
             }
         })
         .buffer_unordered(CONCURRENCY_LIMIT) // Run up to CONCURRENCY_LIMIT futures concurrently
-        .collect::<Vec<Result<Option<(String, Array1<f32>, usize)>, ServerError>>>() // Update collected result type
+        .collect::<Vec<Result<Option<(String, Embedding, usize)>, ServerError>>>()
         .await;
 
     // Process collected results, filtering out errors and skipped documents, summing tokens

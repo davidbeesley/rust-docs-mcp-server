@@ -1,12 +1,13 @@
 use crate::{
-    doc_loader::Document,
-    embeddings::{OPENAI_CLIENT, cosine_similarity},
+    doc_loader::{Document, self},
+    embeddings::{OPENAI_CLIENT, cosine_similarity, Embedding},
+    embedding_cache_service::EmbeddingCacheService,
     error::ServerError, // Keep ServerError for ::new()
 };
 use async_openai::{
     types::{
         ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
-        CreateChatCompletionRequestArgs, CreateEmbeddingRequestArgs,
+        CreateChatCompletionRequestArgs,
     },
     // Client as OpenAIClient, // Removed unused import
 };
@@ -57,7 +58,8 @@ use tokio::sync::Mutex;
 struct QueryRustDocsArgs {
     #[schemars(description = "The specific question about the crate's API or usage.")]
     question: String,
-    // Removed crate_name field as it's implicit to the server instance
+    #[schemars(description = "Optional crate name to load documentation from (uses locally generated docs). If not provided, uses the server's configured crate.")]
+    crate_name: Option<String>,
 }
 
 // --- Main Server Struct ---
@@ -67,7 +69,8 @@ struct QueryRustDocsArgs {
 pub struct RustDocsServer {
     crate_name: Arc<String>, // Use Arc for cheap cloning
     documents: Arc<Vec<Document>>,
-    embeddings: Arc<Vec<(String, Array1<f32>)>>,
+    embeddings: Arc<Vec<(String, Embedding)>>,
+    embedding_cache_service: Arc<EmbeddingCacheService>, // Embedding cache service
     peer: Arc<Mutex<Option<Peer<RoleServer>>>>, // Uses tokio::sync::Mutex
     startup_message: Arc<Mutex<Option<String>>>, // Keep the message itself
     startup_message_sent: Arc<Mutex<bool>>,     // Flag to track if sent (using tokio::sync::Mutex)
@@ -79,14 +82,22 @@ impl RustDocsServer {
     pub fn new(
         crate_name: String,
         documents: Vec<Document>,
-        embeddings: Vec<(String, Array1<f32>)>,
+        embeddings: Vec<(String, Embedding)>,
         startup_message: String,
     ) -> Result<Self, ServerError> {
+        // Get OpenAI API key from environment
+        let openai_api_key = env::var("OPENAI_API_KEY")
+            .map_err(|_| ServerError::MissingEnvVar("OPENAI_API_KEY".to_string()))?;
+        
+        // Initialize the embedding cache service
+        let embedding_cache_service = EmbeddingCacheService::new(openai_api_key);
+        
         // Keep ServerError for potential future init errors
         Ok(Self {
             crate_name: Arc::new(crate_name),
             documents: Arc::new(documents),
             embeddings: Arc::new(embeddings),
+            embedding_cache_service: Arc::new(embedding_cache_service),
             peer: Arc::new(Mutex::new(None)), // Uses tokio::sync::Mutex
             startup_message: Arc::new(Mutex::new(Some(startup_message))), // Initialize message
             startup_message_sent: Arc::new(Mutex::new(false)), // Initialize flag to false
@@ -157,50 +168,83 @@ impl RustDocsServer {
             drop(sent_guard);
         }
 
-        // Argument validation for crate_name removed
-
         let question = &args.question;
+        
+        // Check if a custom crate name was provided
+        let (crate_name, documents, embeddings) = if let Some(custom_crate) = &args.crate_name {
+            // Load from local cargo doc output
+            self.send_log(
+                LoggingLevel::Info,
+                format!(
+                    "Loading local documentation for crate '{}'",
+                    custom_crate
+                ),
+            );
+            
+            // Load documents from cargo doc
+            let docs = doc_loader::load_documents_from_cargo_doc(custom_crate)
+                .map_err(|e| McpError::internal_error(format!("Failed to load local documentation: {}", e), None))?;
+                
+            if docs.is_empty() {
+                return Err(McpError::internal_error(
+                    format!("No documentation found for crate '{}'. Run 'cargo doc --package {}' first.", custom_crate, custom_crate), 
+                    None
+                ));
+            }
+            
+            // Use embedding cache service to get or generate embeddings
+            let mut array_embeddings = Vec::new();
+            self.send_log(
+                LoggingLevel::Info,
+                format!("Using embedding cache service for crate '{}'", custom_crate),
+            );
+            
+            for doc in &docs {
+                // Get embedding from cache or generate new one
+                match self.embedding_cache_service.get_embedding(&doc.content).await {
+                    Ok(embedding) => {
+                        array_embeddings.push((doc.path.clone(), embedding));
+                    },
+                    Err(e) => {
+                        return Err(McpError::internal_error(
+                            format!("Failed to get embedding for document: {}", e), 
+                            None
+                        ));
+                    }
+                }
+            }
+            
+            (custom_crate.clone(), docs, array_embeddings)
+        } else {
+            // Use the server's configured crate
+            (self.crate_name.to_string(), self.documents.as_ref().clone(), self.embeddings.as_ref().clone())
+        };
 
         // Log received query via MCP
         self.send_log(
             LoggingLevel::Info,
             format!(
                 "Received query for crate '{}': {}",
-                self.crate_name, question
+                crate_name, question
             ),
         );
 
-        // --- Embedding Generation for Question ---
-        let client = OPENAI_CLIENT
-            .get()
-            .ok_or_else(|| McpError::internal_error("OpenAI client not initialized", None))?;
+        // --- Embedding Generation for Question using the cache service ---
+        let question_embedding = match self.embedding_cache_service.get_embedding(question).await {
+            Ok(embedding) => embedding,
+            Err(e) => return Err(McpError::internal_error(
+                format!("Failed to get embedding for question: {}", e), 
+                None
+            )),
+        };
 
-        let embedding_model: String =
-            env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "text-embedding-3-small".to_string());
-        let question_embedding_request = CreateEmbeddingRequestArgs::default()
-            .model(embedding_model)
-            .input(question.to_string())
-            .build()
-            .map_err(|e| {
-                McpError::internal_error(format!("Failed to build embedding request: {}", e), None)
-            })?;
-
-        let question_embedding_response = client
-            .embeddings()
-            .create(question_embedding_request)
-            .await
-            .map_err(|e| McpError::internal_error(format!("OpenAI API error: {}", e), None))?;
-
-        let question_embedding = question_embedding_response.data.first().ok_or_else(|| {
-            McpError::internal_error("Failed to get embedding for question", None)
-        })?;
-
-        let question_vector = Array1::from(question_embedding.embedding.clone());
+        let question_vector = Array1::from(question_embedding.values.clone());
 
         // --- Find Best Matching Document ---
         let mut best_match: Option<(&str, f32)> = None;
-        for (path, doc_embedding) in self.embeddings.iter() {
-            let score = cosine_similarity(question_vector.view(), doc_embedding.view());
+        for (path, doc_embedding) in embeddings.iter() {
+            let doc_vector = doc_embedding.to_array();
+            let score = cosine_similarity(question_vector.view(), doc_vector.view());
             if best_match.is_none() || score > best_match.unwrap().1 {
                 best_match = Some((path, score));
             }
@@ -210,7 +254,7 @@ impl RustDocsServer {
         let response_text = match best_match {
             Some((best_path, _score)) => {
                 eprintln!("Best match found: {}", best_path);
-                let context_doc = self.documents.iter().find(|doc| doc.path == best_path);
+                let context_doc = documents.iter().find(|doc| doc.path == best_path);
 
                 if let Some(doc) = context_doc {
                     let system_prompt = format!(
@@ -218,7 +262,7 @@ impl RustDocsServer {
                          Answer the user's question based *only* on the provided context. \
                          If the context does not contain the answer, say so. \
                          Do not make up information. Be clear, concise, and comprehensive providing example usage code when possible.",
-                        self.crate_name
+                        crate_name
                     );
                     let user_prompt = format!(
                         "Context:\n---\n{}\n---\n\nQuestion: {}",
@@ -259,6 +303,11 @@ impl RustDocsServer {
                             )
                         })?;
 
+                    // Get the OpenAI client
+                    let client = OPENAI_CLIENT
+                        .get()
+                        .ok_or_else(|| McpError::internal_error("OpenAI client not initialized", None))?;
+                        
                     let chat_response = client.chat().create(chat_request).await.map_err(|e| {
                         McpError::internal_error(format!("OpenAI chat API error: {}", e), None)
                     })?;
@@ -278,7 +327,7 @@ impl RustDocsServer {
         // --- Format and Return Result ---
         Ok(CallToolResult::success(vec![Content::text(format!(
             "From {} docs: {}",
-            self.crate_name, response_text
+            crate_name, response_text
         ))]))
     }
 }
@@ -306,7 +355,9 @@ impl ServerHandler for RustDocsServer {
             instructions: Some(format!(
                 "This server provides tools to query documentation for the '{}' crate. \
                  Use the 'query_rust_docs' tool with a specific question to get information \
-                 about its API, usage, and examples, derived from its official documentation.",
+                 about its API, usage, and examples, derived from its official documentation. \
+                 You can optionally specify a different crate name with the 'crate_name' parameter \
+                 to query locally generated documentation (run 'cargo doc --package <crate_name>' first).",
                 self.crate_name
             )),
         }

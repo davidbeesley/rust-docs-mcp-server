@@ -2,6 +2,9 @@ use rmcp::ServiceError; // Assuming ServiceError is the correct top-level error
 use thiserror::Error;
 use crate::doc_loader::DocLoaderError; // Need to import DocLoaderError from the sibling module
 
+// Define a Result type alias for convenience
+pub type Result<T> = std::result::Result<T, ServerError>;
+
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error("Environment variable not set: {0}")]
@@ -26,4 +29,24 @@ pub enum ServerError {
     Xdg(String),
     #[error("MCP Runtime Error: {0}")]
     McpRuntime(String),
+    
+    // New errors for embedding cache service
+    #[error("Embedding Provider Error: {0}")]
+    EmbeddingProvider(String),
+    #[error("Embedding Cache Error: {0}")]
+    EmbeddingCache(String),
+    #[error("Embedding Dimension Mismatch: expected {expected}, got {actual}")]
+    EmbeddingDimensionMismatch { expected: usize, actual: usize },
+    #[error("Unsupported Model Error: {0}")]
+    UnsupportedModel(String),
+    #[error("Bincode Error: {0}")]
+    Bincode(#[from] bincode::error::EncodeError),
+    #[error("Bincode Decode Error: {0}")]
+    BincodeDecode(#[from] bincode::error::DecodeError),
+    
+    // HTTP client errors
+    #[error("HTTP Request Error: {0}")]
+    Reqwest(#[from] reqwest::Error),
+    #[error("HTTP Transport Error: {0}")]
+    HttpTransport(String),
 }

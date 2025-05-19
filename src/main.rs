@@ -1,13 +1,20 @@
-// Declare modules (keep doc_loader, embeddings, error)
+// Declare modules
 mod doc_loader;
+mod document_chunker;
 mod embeddings;
+mod embedding_cache_service;
 mod error;
-mod server; // Keep server module as RustDocsServer is defined there
+mod server;
+
+// Test module
+#[cfg(test)]
+mod tests;
 
 // Use necessary items from modules and crates
 use crate::{
     doc_loader::Document,
-    embeddings::{generate_embeddings, CachedDocumentEmbedding, OPENAI_CLIENT},
+    document_chunker::{DocumentChunker, Chunk},
+    embeddings::{generate_embeddings, CachedDocumentEmbedding, Embedding, EmbeddingProvider, OPENAI_CLIENT},
     error::ServerError,
     server::RustDocsServer, // Import the updated RustDocsServer
 };
@@ -130,7 +137,7 @@ async fn main() -> Result<(), ServerError> {
 
     // --- Try Loading Embeddings and Documents from Cache ---
     let mut loaded_from_cache = false;
-    let mut loaded_embeddings: Option<Vec<(String, Array1<f32>)>> = None;
+    let mut loaded_embeddings: Option<Vec<(String, Embedding)>> = None;
     let mut loaded_documents_from_cache: Option<Vec<Document>> = None;
 
     if embeddings_file_path.exists() {
@@ -153,7 +160,13 @@ async fn main() -> Result<(), ServerError> {
                         let mut embeddings = Vec::with_capacity(cached_data.len());
                         let mut documents = Vec::with_capacity(cached_data.len());
                         for item in cached_data {
-                            embeddings.push((item.path.clone(), Array1::from(item.vector)));
+                            // Convert vector to Embedding struct for compatibility
+                            let embedding = Embedding::new(
+                                item.vector.clone(),
+                                EmbeddingProvider::OpenAI, // Assume OpenAI as default provider for cached data
+                                "text-embedding-3-small".to_string(), // Use default model name for cached data
+                            );
+                            embeddings.push((item.path.clone(), embedding));
                             documents.push(Document {
                                 path: item.path,
                                 content: item.content,
@@ -234,15 +247,15 @@ async fn main() -> Result<(), ServerError> {
             );
 
             let mut combined_cache_data: Vec<CachedDocumentEmbedding> = Vec::new();
-            let embedding_map: std::collections::HashMap<String, Array1<f32>> =
+            let embedding_map: std::collections::HashMap<String, Embedding> =
                 generated_embeddings.clone().into_iter().collect();
 
             for doc in &loaded_documents {
-                if let Some(embedding_array) = embedding_map.get(&doc.path) {
+                if let Some(embedding) = embedding_map.get(&doc.path) {
                     combined_cache_data.push(CachedDocumentEmbedding {
                         path: doc.path.clone(),
                         content: doc.content.clone(),
-                        vector: embedding_array.to_vec(),
+                        vector: embedding.values.clone(), // Extract vector values from Embedding struct
                     });
                 } else {
                     eprintln!(
