@@ -1,7 +1,7 @@
 use crate::{
-    doc_loader::{Document, self},
-    embeddings::{OPENAI_CLIENT, cosine_similarity, Embedding},
+    doc_loader::{self, Document},
     embedding_cache_service::EmbeddingCacheService,
+    embeddings::{Embedding, OPENAI_CLIENT, cosine_similarity},
     error::ServerError, // Keep ServerError for ::new()
 };
 use async_openai::{
@@ -57,7 +57,9 @@ use tokio::sync::Mutex;
 struct QueryRustDocsArgs {
     #[schemars(description = "The specific question about the crate's API or usage.")]
     question: String,
-    #[schemars(description = "The crate name to load documentation from (uses locally generated docs).")]
+    #[schemars(
+        description = "The crate name to load documentation from (uses locally generated docs)."
+    )]
     crate_name: String,
 }
 
@@ -67,24 +69,22 @@ struct QueryRustDocsArgs {
 #[derive(Clone)] // Add Clone for tool macro requirements
 pub struct RustDocsServer {
     embedding_cache_service: Arc<EmbeddingCacheService>, // Embedding cache service
-    peer: Arc<Mutex<Option<Peer<RoleServer>>>>, // Uses tokio::sync::Mutex
-    startup_message: Arc<Mutex<Option<String>>>, // Keep the message itself
-    startup_message_sent: Arc<Mutex<bool>>,     // Flag to track if sent (using tokio::sync::Mutex)
-                                                // tool_name and info are handled by ServerHandler/macros now
+    peer: Arc<Mutex<Option<Peer<RoleServer>>>>,          // Uses tokio::sync::Mutex
+    startup_message: Arc<Mutex<Option<String>>>,         // Keep the message itself
+    startup_message_sent: Arc<Mutex<bool>>, // Flag to track if sent (using tokio::sync::Mutex)
+                                            // tool_name and info are handled by ServerHandler/macros now
 }
 
 impl RustDocsServer {
     // Updated constructor - simplified to only initialize cache service and messaging
-    pub fn new(
-        startup_message: String,
-    ) -> Result<Self, ServerError> {
+    pub fn new(startup_message: String) -> Result<Self, ServerError> {
         // Get OpenAI API key from environment
         let openai_api_key = env::var("OPENAI_API_KEY")
             .map_err(|_| ServerError::MissingEnvVar("OPENAI_API_KEY".to_string()))?;
-        
+
         // Initialize the embedding cache service
         let embedding_cache_service = EmbeddingCacheService::new(openai_api_key)?;
-        
+
         // Keep ServerError for potential future init errors
         Ok(Self {
             embedding_cache_service: Arc::new(embedding_cache_service),
@@ -124,16 +124,16 @@ impl RustDocsServer {
     fn _create_resource_text(&self, uri: &str, name: &str) -> Resource {
         RawResource::new(uri, name.to_string()).no_annotation()
     }
-    
+
     // Find all available crates in the cargo doc directory
     fn get_available_crates(&self) -> Vec<String> {
         let target_doc_path = std::path::Path::new("./target/doc");
-        
+
         // If the doc directory doesn't exist, return empty list
         if !target_doc_path.exists() || !target_doc_path.is_dir() {
             return Vec::new();
         }
-        
+
         // Read the directory and collect crate names
         match std::fs::read_dir(target_doc_path) {
             Ok(entries) => {
@@ -144,7 +144,7 @@ impl RustDocsServer {
                         // Check if this directory has an index.html file (indicating a proper doc dir)
                         let path = entry.path();
                         let has_index = path.join("index.html").exists();
-                        
+
                         if has_index {
                             entry.file_name().to_str().map(String::from)
                         } else {
@@ -152,7 +152,7 @@ impl RustDocsServer {
                         }
                     })
                     .collect()
-            },
+            }
             Err(_) => Vec::new(),
         }
     }
@@ -178,58 +178,69 @@ impl RustDocsServer {
         }
         drop(sent_guard);
     }
-    
+
     /// Load documentation and embeddings for a custom crate
-    async fn load_custom_crate_docs(&self, crate_name: &str) -> Result<(String, Vec<Document>, Vec<(String, Embedding)>), McpError> {
+    async fn load_custom_crate_docs(
+        &self,
+        crate_name: &str,
+    ) -> Result<(String, Vec<Document>, Vec<(String, Embedding)>), McpError> {
         self.send_log(
             LoggingLevel::Info,
             format!("Loading local documentation for crate '{}'", crate_name),
         );
-        
+
         // Load documents from cargo doc
-        let docs = doc_loader::load_documents_from_cargo_doc(crate_name)
-            .map_err(|e| McpError::internal_error(format!("Failed to load local documentation: {}", e), None))?;
-            
+        let docs = doc_loader::load_documents_from_cargo_doc(crate_name).map_err(|e| {
+            McpError::internal_error(format!("Failed to load local documentation: {}", e), None)
+        })?;
+
         if docs.is_empty() {
             return Err(McpError::internal_error(
-                format!("No documentation found for crate '{}'. Run 'cargo doc --package {}' first.", crate_name, crate_name), 
-                None
+                format!(
+                    "No documentation found for crate '{}'. Run 'cargo doc --package {}' first.",
+                    crate_name, crate_name
+                ),
+                None,
             ));
         }
-        
+
         // Use embedding cache service to get or generate embeddings
         let mut array_embeddings = Vec::new();
         self.send_log(
             LoggingLevel::Info,
             format!("Using embedding cache service for crate '{}'", crate_name),
         );
-        
+
         for doc in &docs {
             // Get embedding from cache or generate new one
-            match self.embedding_cache_service.get_embedding(&doc.content).await {
+            match self
+                .embedding_cache_service
+                .get_embedding(&doc.content)
+                .await
+            {
                 Ok(embedding) => {
                     array_embeddings.push((doc.path.clone(), embedding));
-                },
+                }
                 Err(e) => {
                     return Err(McpError::internal_error(
-                        format!("Failed to get embedding for document: {}", e), 
-                        None
+                        format!("Failed to get embedding for document: {}", e),
+                        None,
                     ));
                 }
             }
         }
-        
+
         Ok((crate_name.to_string(), docs, array_embeddings))
     }
-    
+
     /// Find the best matching document for a given question embedding
     fn find_best_match<'a>(
-        &self, 
+        &self,
         question_embedding: &Embedding,
         embeddings: &'a [(String, Embedding)],
     ) -> Option<(&'a str, f32)> {
         let question_vector = question_embedding.to_array();
-        
+
         let mut best_match: Option<(&str, f32)> = None;
         for (path, doc_embedding) in embeddings {
             let doc_vector = doc_embedding.to_array();
@@ -238,10 +249,10 @@ impl RustDocsServer {
                 best_match = Some((path, score));
             }
         }
-        
+
         best_match
     }
-    
+
     /// Generate a response using the LLM based on matched document context
     async fn generate_llm_response(
         &self,
@@ -256,15 +267,15 @@ impl RustDocsServer {
              Do not make up information. Be clear, concise, and comprehensive providing example usage code when possible.",
             crate_name
         );
-        
+
         let user_prompt = format!(
             "Context:\n---\n{}\n---\n\nQuestion: {}",
             matched_doc.content, question
         );
 
-        let llm_model: String = env::var("LLM_MODEL")
-            .unwrap_or_else(|_| "gpt-4o-mini-2024-07-18".to_string());
-            
+        let llm_model: String =
+            env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini-2024-07-18".to_string());
+
         let chat_request = CreateChatCompletionRequestArgs::default()
             .model(llm_model)
             .messages(vec![
@@ -291,20 +302,18 @@ impl RustDocsServer {
             ])
             .build()
             .map_err(|e| {
-                McpError::internal_error(
-                    format!("Failed to build chat request: {}", e),
-                    None,
-                )
+                McpError::internal_error(format!("Failed to build chat request: {}", e), None)
             })?;
 
         // Get the OpenAI client
         let client = OPENAI_CLIENT
             .get()
             .ok_or_else(|| McpError::internal_error("OpenAI client not initialized", None))?;
-            
-        let chat_response = client.chat().create(chat_request).await.map_err(|e| {
-            McpError::internal_error(format!("OpenAI chat API error: {}", e), None)
-        })?;
+
+        let chat_response =
+            client.chat().create(chat_request).await.map_err(|e| {
+                McpError::internal_error(format!("OpenAI chat API error: {}", e), None)
+            })?;
 
         Ok(chat_response
             .choices
@@ -326,7 +335,7 @@ impl RustDocsServer {
 
         let question = &args.question;
         let crate_name = &args.crate_name;
-        
+
         // Load documentation and embeddings for the specified crate
         let (crate_name, documents, embeddings) = self.load_custom_crate_docs(crate_name).await?;
 
@@ -337,23 +346,29 @@ impl RustDocsServer {
         );
 
         // Generate embedding for the question
-        let question_embedding = self.embedding_cache_service.get_embedding(question).await
-            .map_err(|e| McpError::internal_error(
-                format!("Failed to get embedding for question: {}", e), 
-                None
-            ))?;
+        let question_embedding = self
+            .embedding_cache_service
+            .get_embedding(question)
+            .await
+            .map_err(|e| {
+                McpError::internal_error(
+                    format!("Failed to get embedding for question: {}", e),
+                    None,
+                )
+            })?;
 
         // Find the best matching document
         let response_text = match self.find_best_match(&question_embedding, &embeddings) {
             Some((best_path, score)) => {
                 eprintln!("Best match found: {} (score: {})", best_path, score);
-                
+
                 if let Some(doc) = documents.iter().find(|doc| doc.path == best_path) {
-                    self.generate_llm_response(doc, question, &crate_name).await?
+                    self.generate_llm_response(doc, question, &crate_name)
+                        .await?
                 } else {
                     "Error: Could not find content for best matching document.".to_string()
                 }
-            },
+            }
             None => "Could not find any relevant document context.".to_string(),
         };
 
@@ -404,13 +419,15 @@ impl ServerHandler for RustDocsServer {
     ) -> Result<ListResourcesResult, McpError> {
         // Get all available crates from the cargo doc directory
         let available_crates = self.get_available_crates();
-        
+
         // Create resources for each available crate
         let resources = available_crates
             .iter()
-            .map(|crate_name| self._create_resource_text(&format!("crate://{}", crate_name), crate_name))
+            .map(|crate_name| {
+                self._create_resource_text(&format!("crate://{}", crate_name), crate_name)
+            })
             .collect();
-            
+
         Ok(ListResourcesResult {
             resources,
             next_cursor: None,
@@ -426,17 +443,17 @@ impl ServerHandler for RustDocsServer {
         if let Some(crate_name) = request.uri.strip_prefix("crate://") {
             // Check if this crate's documentation exists
             let available_crates = self.get_available_crates();
-            
+
             if available_crates.contains(&crate_name.to_string()) {
                 Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(
-                        crate_name,
-                        &request.uri,
-                    )],
+                    contents: vec![ResourceContents::text(crate_name, &request.uri)],
                 })
             } else {
                 Err(McpError::resource_not_found(
-                    format!("Crate documentation not found: {}. Run 'cargo doc --package {}' first.", crate_name, crate_name),
+                    format!(
+                        "Crate documentation not found: {}. Run 'cargo doc --package {}' first.",
+                        crate_name, crate_name
+                    ),
                     Some(json!({ "uri": request.uri })),
                 ))
             }

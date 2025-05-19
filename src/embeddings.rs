@@ -1,19 +1,19 @@
 use crate::{doc_loader::Document, error::ServerError};
 use async_openai::{
-    config::OpenAIConfig, error::ApiError as OpenAIAPIErr, types::CreateEmbeddingRequestArgs,
-    Client as OpenAIClient,
+    Client as OpenAIClient, config::OpenAIConfig, error::ApiError as OpenAIAPIErr,
+    types::CreateEmbeddingRequestArgs,
 };
-use ndarray::{Array1, ArrayView1};
-use std::sync::OnceLock;
-use std::sync::Arc;
-use tiktoken_rs::cl100k_base;
 use futures::stream::{self, StreamExt};
+use ndarray::{Array1, ArrayView1};
+use std::sync::Arc;
+use std::sync::OnceLock;
+use tiktoken_rs::cl100k_base;
 
 // Static OnceLock for the OpenAI client
 pub static OPENAI_CLIENT: OnceLock<OpenAIClient<OpenAIConfig>> = OnceLock::new();
 
-use bincode::{Encode, Decode};
-use serde::{Serialize, Deserialize};
+use bincode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Represents supported embedding providers
@@ -57,7 +57,7 @@ impl Embedding {
             dimensions,
         }
     }
-    
+
     /// Converts the embedding to an ndarray::Array1 for numerical operations
     pub fn to_array(&self) -> Array1<f32> {
         Array1::from(self.values.clone())
@@ -68,13 +68,12 @@ impl Embedding {
 #[derive(Serialize, Deserialize, Debug, Encode, Decode)]
 pub struct CachedDocumentEmbedding {
     pub path: String,
-    pub content: String, // The extracted document content
+    pub content: String,  // The extracted document content
     pub vector: Vec<f32>, // Keep this as 'vector' for backward compatibility with main.rs
 }
 
 /// Result type specific to embedding operations
 pub type EmbeddingResult<T> = std::result::Result<T, crate::error::ServerError>;
-
 
 /// Calculates the cosine similarity between two vectors.
 pub fn cosine_similarity(v1: ArrayView1<f32>, v2: ArrayView1<f32>) -> f32 {
@@ -99,10 +98,10 @@ pub fn embedding_similarity(e1: &Embedding, e2: &Embedding) -> EmbeddingResult<f
             actual: e2.dimensions,
         });
     }
-    
+
     let v1 = e1.to_array();
     let v2 = e2.to_array();
-    
+
     Ok(cosine_similarity(v1.view(), v2.view()))
 }
 
@@ -138,7 +137,8 @@ async fn generate_single_embedding(
             async_openai::error::OpenAIError::ApiError(OpenAIAPIErr {
                 message: format!(
                     "Mismatch in response length for document {}. Expected 1, got {}.",
-                    index + 1, response.data.len()
+                    index + 1,
+                    response.data.len()
                 ),
                 r#type: Some("sdk_error".to_string()),
                 param: None,
@@ -150,14 +150,10 @@ async fn generate_single_embedding(
     // Process result
     let embedding_data = response.data.first().unwrap(); // Safe unwrap due to check above
     let vector = embedding_data.embedding.clone();
-    
+
     // Create an Embedding struct
-    let embedding = Embedding::new(
-        vector,
-        EmbeddingProvider::OpenAI,
-        model.to_string(),
-    );
-    
+    let embedding = Embedding::new(vector, EmbeddingProvider::OpenAI, model.to_string());
+
     // Return result with path, embedding, and token count
     Ok(Some((doc.path.clone(), embedding, token_count)))
 }
@@ -167,7 +163,8 @@ pub async fn generate_embeddings(
     client: &OpenAIClient<OpenAIConfig>,
     documents: &[Document],
     model: &str,
-) -> EmbeddingResult<(Vec<(String, Embedding)>, usize)> { // Return tuple: (embeddings, total_tokens)
+) -> EmbeddingResult<(Vec<(String, Embedding)>, usize)> {
+    // Return tuple: (embeddings, total_tokens)
     // Get the tokenizer for the model and wrap in Arc
     let bpe = Arc::new(cl100k_base().map_err(|e| ServerError::Tiktoken(e.to_string()))?);
 
@@ -182,9 +179,7 @@ pub async fn generate_embeddings(
             let doc = doc.clone();
             let bpe = Arc::clone(&bpe);
 
-            async move {
-                generate_single_embedding(&client, &doc, &model, index, &bpe).await
-            }
+            async move { generate_single_embedding(&client, &doc, &model, index, &bpe).await }
         })
         .buffer_unordered(CONCURRENCY_LIMIT)
         .collect::<Vec<EmbeddingResult<Option<(String, Embedding, usize)>>>>()
@@ -193,14 +188,14 @@ pub async fn generate_embeddings(
     // Process collected results, filtering out errors and skipped documents
     let mut embeddings_vec = Vec::new();
     let mut total_processed_tokens: usize = 0;
-    
+
     for result in results {
         match result {
             Ok(Some((path, embedding, tokens))) => {
                 embeddings_vec.push((path, embedding));
                 total_processed_tokens += tokens;
             }
-            Ok(None) => {}, // Skip documents that exceeded token limit
+            Ok(None) => {} // Skip documents that exceeded token limit
             Err(e) => {
                 eprintln!("Error during concurrent embedding generation: {}", e);
                 return Err(e);
@@ -210,8 +205,9 @@ pub async fn generate_embeddings(
 
     eprintln!(
         "Finished generating embeddings. Successfully processed {} documents ({} tokens).",
-        embeddings_vec.len(), total_processed_tokens
+        embeddings_vec.len(),
+        total_processed_tokens
     );
-    
+
     Ok((embeddings_vec, total_processed_tokens))
 }

@@ -1,8 +1,8 @@
 // Declare modules
 mod doc_loader;
 mod document_chunker;
-mod embeddings;
 mod embedding_cache_service;
+mod embeddings;
 mod error;
 mod server;
 
@@ -13,7 +13,9 @@ mod tests;
 // Use necessary items from modules and crates
 use crate::{
     doc_loader::Document,
-    embeddings::{generate_embeddings, CachedDocumentEmbedding, Embedding, EmbeddingProvider, OPENAI_CLIENT},
+    embeddings::{
+        CachedDocumentEmbedding, Embedding, EmbeddingProvider, OPENAI_CLIENT, generate_embeddings,
+    },
     error::ServerError,
     server::RustDocsServer,
 };
@@ -23,8 +25,8 @@ use cargo::core::PackageIdSpec;
 use clap::Parser;
 // Import rmcp items needed for the new approach
 use rmcp::{
-    transport::io::stdio, // Use the standard stdio transport
     ServiceExt,           // Import the ServiceExt trait for .serve() and .waiting()
+    transport::io::stdio, // Use the standard stdio transport
 };
 use std::{
     collections::hash_map::DefaultHasher,
@@ -83,7 +85,9 @@ async fn main() -> Result<(), ServerError> {
     // Check if the target/doc directory exists
     let target_doc_path = std::path::Path::new("./target/doc");
     if !target_doc_path.exists() {
-        eprintln!("Warning: ./target/doc directory not found. Run 'cargo doc' to generate documentation for local crates.");
+        eprintln!(
+            "Warning: ./target/doc directory not found. Run 'cargo doc' to generate documentation for local crates."
+        );
     }
 
     // Create a simple startup message

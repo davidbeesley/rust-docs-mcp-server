@@ -6,27 +6,30 @@ use std::time::Instant;
 fn main() -> io::Result<()> {
     // Create a document chunker with default settings
     let chunker = DocumentChunker::new();
-    
+
     // Always use our sample document
     let input = generate_sample_document();
     println!("Using sample document ({} bytes)", input.len());
-    
+
     // Time the chunking operation
     let start = Instant::now();
     let chunks = chunker.chunk_document(&input);
     let elapsed = start.elapsed();
-    
+
     // Report stats
     println!("\nContent-Defined Chunking Results:");
     println!("--------------------------------");
     println!("Chunks created: {}", chunks.len());
-    println!("Average chunk size: {:.2} bytes", input.len() as f64 / chunks.len() as f64);
+    println!(
+        "Average chunk size: {:.2} bytes",
+        input.len() as f64 / chunks.len() as f64
+    );
     println!("Time to chunk: {:.2?}", elapsed);
-    
+
     // Show size distribution
     let mut sizes: Vec<usize> = chunks.iter().map(|c| c.content.len()).collect();
     sizes.sort_unstable();
-    
+
     if !sizes.is_empty() {
         println!("\nChunk size distribution:");
         println!("  Min: {} bytes", sizes[0]);
@@ -35,27 +38,35 @@ fn main() -> io::Result<()> {
         println!("  75%: {} bytes", sizes[3 * sizes.len() / 4]);
         println!("  Max: {} bytes", sizes[sizes.len() - 1]);
     }
-    
+
     // Test for collisions
     let unique_ids: HashSet<String> = chunks.iter().map(|c| c.id.clone()).collect();
     println!("\nUnique chunk IDs: {}/{}", unique_ids.len(), chunks.len());
     if unique_ids.len() != chunks.len() {
         println!("WARNING: Hash collisions detected!");
     }
-    
+
     // Print first few chunks
     println!("\nFirst few chunks:");
     for (i, chunk) in chunks.iter().take(3).enumerate() {
         println!("Chunk #{} (id: {}...)", i + 1, &chunk.id[0..16]);
         println!("  Size: {} bytes", chunk.content.len());
-        println!("  Preview: {}", chunk.content.chars().take(100).collect::<String>().replace('\n', " "));
+        println!(
+            "  Preview: {}",
+            chunk
+                .content
+                .chars()
+                .take(100)
+                .collect::<String>()
+                .replace('\n', " ")
+        );
         println!();
     }
-    
+
     // Modification stability test
     println!("\nTesting chunk stability with modifications:");
     test_stability(&chunker);
-    
+
     Ok(())
 }
 
@@ -237,24 +248,24 @@ It should be chunked appropriately.
     // Chunk both documents
     let original_chunks = chunker.chunk_document(original);
     let modified_chunks = chunker.chunk_document(modified);
-    
+
     // Compare results
     println!("Original chunks: {}", original_chunks.len());
     println!("Modified chunks: {}", modified_chunks.len());
-    
+
     // Create sets of chunk IDs for comparison
     let original_ids: HashSet<String> = original_chunks.iter().map(|c| c.id.clone()).collect();
     let modified_ids: HashSet<String> = modified_chunks.iter().map(|c| c.id.clone()).collect();
-    
+
     // Find differences
     let unchanged: HashSet<_> = original_ids.intersection(&modified_ids).collect();
     let changed_orig: HashSet<_> = original_ids.difference(&modified_ids).collect();
     let changed_mod: HashSet<_> = modified_ids.difference(&original_ids).collect();
-    
+
     println!("Unchanged chunks: {}", unchanged.len());
     println!("Changed in original: {}", changed_orig.len());
     println!("Changed in modified: {}", changed_mod.len());
-    
+
     // Calculate stability percentage
     let stability = unchanged.len() as f64 / original_chunks.len() as f64 * 100.0;
     println!("Stability: {:.1}% (higher is better)", stability);

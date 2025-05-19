@@ -11,7 +11,7 @@ pub fn ensure_dir_exists(path: &Path) -> std::io::Result<()> {
         if !path.is_dir() {
             return Err(Error::new(
                 ErrorKind::AlreadyExists,
-                format!("Path exists but is not a directory: {}", path.display())
+                format!("Path exists but is not a directory: {}", path.display()),
             ));
         }
     } else {
