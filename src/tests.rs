@@ -4,7 +4,6 @@ mod module_tests {
     use crate::embedding_cache_service::EmbeddingCacheService;
     use crate::embeddings::init_test_client;
     use std::env;
-    use std::path::Path;
 
     // Helper function to set up test environment
     fn setup_env() {
@@ -52,7 +51,7 @@ mod module_tests {
         let _ = init_test_client();
 
         // Create the embedding cache service
-        let service = match EmbeddingCacheService::new("dummy_key_for_tests".to_string()) {
+        let _service = match EmbeddingCacheService::new("dummy_key_for_tests".to_string()) {
             Ok(s) => s,
             Err(e) => {
                 // The service should initialize without errors

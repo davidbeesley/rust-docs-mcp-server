@@ -47,8 +47,8 @@ fn test_document_chunker_large() {
     }
     
     // Check that most chunks are around the target size (except potentially the last one)
-    for i in 0..chunks.len()-1 {
-        assert!(chunks[i].content.len() >= 50, "Chunks should meet minimum size");
+    for chunk in chunks.iter().take(chunks.len()-1) {
+        assert!(chunk.content.len() >= 50, "Chunks should meet minimum size");
     }
     
     // Reassemble the document and check for content loss
