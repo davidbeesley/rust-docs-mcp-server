@@ -90,7 +90,7 @@ impl RustDocsServer {
             .map_err(|_| ServerError::MissingEnvVar("OPENAI_API_KEY".to_string()))?;
         
         // Initialize the embedding cache service
-        let embedding_cache_service = EmbeddingCacheService::new(openai_api_key);
+        let embedding_cache_service = EmbeddingCacheService::new(openai_api_key)?;
         
         // Keep ServerError for potential future init errors
         Ok(Self {

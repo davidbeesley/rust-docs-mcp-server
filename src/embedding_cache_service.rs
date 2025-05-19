@@ -2,13 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::env;
 use std::collections::HashMap;
-use sha2::{Sha256, Digest};
+use std::io::{Error, ErrorKind};
 use serde::{Serialize, Deserialize};
 use reqwest::Client;
 
 use crate::error::Result;
 use crate::embeddings::{Embedding, EmbeddingProvider};
-use crate::document_chunker::{DocumentChunker, Chunk};
+use crate::document_chunker::DocumentChunker;
 
 #[derive(Debug)]
 pub struct EmbeddingCacheService {
@@ -26,32 +26,60 @@ struct CachedEmbedding {
     provider: EmbeddingProvider,
 }
 
+/// Safely creates a directory and all parent directories if they don't exist
+/// Throws an error if path exists but is not a directory
+fn ensure_dir_exists(path: &Path) -> std::io::Result<()> {
+    if path.exists() {
+        if !path.is_dir() {
+            return Err(Error::new(
+                ErrorKind::AlreadyExists,
+                format!("Path exists but is not a directory: {}", path.display())
+            ));
+        }
+    } else {
+        fs::create_dir_all(path)?;
+    }
+    Ok(())
+}
+
 impl EmbeddingCacheService {
-    pub fn new(openai_api_key: String) -> Self {
-        let home_dir = dirs::home_dir().expect("Could not find home directory");
-        let cache_dir = home_dir.join(".rust-doc-embedding-cache");
-        fs::create_dir_all(&cache_dir).expect("Failed to create cache directory");
+    pub fn new(openai_api_key: String) -> Result<Self> {
+        let home_dir = dirs::home_dir().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Could not find home directory"
+            )
+        })?;
         
-        Self {
+        let cache_dir = home_dir.join(".rust-doc-embedding-cache");
+        ensure_dir_exists(&cache_dir)?;
+        
+        Ok(Self {
             cache_dir,
             client: Client::new(),
             openai_api_key,
             chunker: DocumentChunker::new(),
-        }
+        })
     }
     
     /// Creates a new service with custom chunker parameters
-    pub fn with_chunker_params(openai_api_key: String, min_size: usize, target_size: usize, max_size: usize) -> Self {
-        let home_dir = dirs::home_dir().expect("Could not find home directory");
-        let cache_dir = home_dir.join(".rust-doc-embedding-cache");
-        fs::create_dir_all(&cache_dir).expect("Failed to create cache directory");
+    pub fn with_chunker_params(openai_api_key: String, min_size: usize, target_size: usize, max_size: usize) -> Result<Self> {
+        let home_dir = dirs::home_dir().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Could not find home directory"
+            )
+        })?;
         
-        Self {
+        let cache_dir = home_dir.join(".rust-doc-embedding-cache");
+        ensure_dir_exists(&cache_dir)?;
+        
+        Ok(Self {
             cache_dir,
             client: Client::new(),
             openai_api_key,
             chunker: DocumentChunker::with_params(min_size, target_size, max_size),
-        }
+        })
     }
 
     /// Compute the cache path for a chunk based on its ID

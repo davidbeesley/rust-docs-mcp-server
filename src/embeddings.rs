@@ -73,7 +73,7 @@ pub struct CachedDocumentEmbedding {
 }
 
 /// Result type specific to embedding operations
-pub type EmbeddingResult<T> = Result<T, crate::error::ServerError>;
+pub type EmbeddingResult<T> = std::result::Result<T, crate::error::ServerError>;
 
 
 /// Calculates the cosine similarity between two vectors.

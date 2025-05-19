@@ -5,6 +5,7 @@ pub mod embeddings;
 pub mod embedding_cache_service;
 pub mod error;
 pub mod server;
+pub mod utils;
 
 // Re-export commonly used types for convenience
 pub use doc_loader::Document;

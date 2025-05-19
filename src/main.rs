@@ -13,16 +13,14 @@ mod tests;
 // Use necessary items from modules and crates
 use crate::{
     doc_loader::Document,
-    document_chunker::{DocumentChunker, Chunk},
     embeddings::{generate_embeddings, CachedDocumentEmbedding, Embedding, EmbeddingProvider, OPENAI_CLIENT},
     error::ServerError,
-    server::RustDocsServer, // Import the updated RustDocsServer
+    server::RustDocsServer,
 };
 use async_openai::{Client as OpenAIClient, config::OpenAIConfig};
 use bincode::config;
 use cargo::core::PackageIdSpec;
-use clap::Parser; // Import clap Parser
-use ndarray::Array1;
+use clap::Parser;
 // Import rmcp items needed for the new approach
 use rmcp::{
     transport::io::stdio, // Use the standard stdio transport
@@ -70,7 +68,9 @@ fn hash_features(features: &Option<Vec<String>>) -> String {
 #[tokio::main]
 async fn main() -> Result<(), ServerError> {
     // Load .env file if present
-    dotenvy::dotenv().ok();
+    if let Ok(path) = dotenvy::dotenv() {
+        eprintln!("Loaded environment from: {}", path.display());
+    }
 
     // --- Parse CLI Arguments ---
     let cli = Cli::parse();
