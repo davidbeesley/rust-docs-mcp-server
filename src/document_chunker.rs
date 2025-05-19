@@ -47,16 +47,19 @@ impl DocumentChunker {
     }
     
     /// Returns the target chunk size
+    #[allow(dead_code)]
     pub fn target_chunk_size(&self) -> usize {
         self.target_chunk_size
     }
     
     /// Returns the maximum chunk size
+    #[allow(dead_code)]
     pub fn max_chunk_size(&self) -> usize {
         self.max_chunk_size
     }
     
     /// Creates a new DocumentChunker with custom parameters
+    #[allow(dead_code)]
     pub fn with_params(min_size: usize, target_size: usize, max_size: usize) -> Self {
         Self {
             min_chunk_size: min_size,

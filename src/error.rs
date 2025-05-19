@@ -32,12 +32,16 @@ pub enum ServerError {
     
     // New errors for embedding cache service
     #[error("Embedding Provider Error: {0}")]
+    #[allow(dead_code)]
     EmbeddingProvider(String),
     #[error("Embedding Cache Error: {0}")]
+    #[allow(dead_code)]
     EmbeddingCache(String),
     #[error("Embedding Dimension Mismatch: expected {expected}, got {actual}")]
+    #[allow(dead_code)]
     EmbeddingDimensionMismatch { expected: usize, actual: usize },
     #[error("Unsupported Model Error: {0}")]
+    #[allow(dead_code)]
     UnsupportedModel(String),
     #[error("Bincode Error: {0}")]
     Bincode(#[from] bincode::error::EncodeError),
@@ -48,5 +52,6 @@ pub enum ServerError {
     #[error("HTTP Request Error: {0}")]
     Reqwest(#[from] reqwest::Error),
     #[error("HTTP Transport Error: {0}")]
+    #[allow(dead_code)]
     HttpTransport(String),
 }

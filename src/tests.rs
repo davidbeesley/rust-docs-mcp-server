@@ -1,7 +1,6 @@
 #[cfg(test)]
-mod tests {
+mod module_tests {
     use std::env;
-    use tokio;
     use crate::doc_loader::load_documents_from_cargo_doc;
     use crate::embedding_cache_service::EmbeddingCacheService;
     
@@ -52,7 +51,7 @@ mod tests {
         setup_env();
         
         // Create the embedding cache service
-        let service = EmbeddingCacheService::new("dummy_key_for_tests".to_string());
+        let service = EmbeddingCacheService::new("dummy_key_for_tests".to_string()).unwrap();
         
         // Test document embedding - note this will mock the API call in a real implementation
         // In this test context, we just verify it doesn't panic
@@ -74,7 +73,3 @@ mod tests {
     
     // Add more tests as needed...
 }
-
-// Include the module in main.rs with:
-// #[cfg(test)]
-// mod tests;

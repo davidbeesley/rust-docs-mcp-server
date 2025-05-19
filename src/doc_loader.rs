@@ -90,7 +90,7 @@ fn process_html_documents(docs_path: &Path, crate_name: &str) -> Result<Vec<Docu
         }
         
         // Skip files within source code view directories
-        if paths.first().map_or(false, |p| p.components().any(|comp| comp.as_os_str() == "src")) {
+        if paths.first().is_some_and(|p| p.components().any(|comp| comp.as_os_str() == "src")) {
             continue;
         }
         

@@ -63,6 +63,7 @@ impl EmbeddingCacheService {
     }
     
     /// Creates a new service with custom chunker parameters
+    #[allow(dead_code)]
     pub fn with_chunker_params(openai_api_key: String, min_size: usize, target_size: usize, max_size: usize) -> Result<Self> {
         let home_dir = dirs::home_dir().ok_or_else(|| {
             std::io::Error::new(
@@ -264,8 +265,7 @@ impl EmbeddingCacheService {
             .await?;
 
         if !response.status().is_success() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(std::io::Error::other(
                 format!("OpenAI API error: {}", response.status())
             ).into());
         }

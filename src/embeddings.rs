@@ -20,7 +20,7 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 pub enum EmbeddingProvider {
     OpenAI,
-    ONNX,
+    Onnx,
     // Can be extended with other providers
 }
 
@@ -28,7 +28,7 @@ impl fmt::Display for EmbeddingProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             EmbeddingProvider::OpenAI => write!(f, "OpenAI"),
-            EmbeddingProvider::ONNX => write!(f, "ONNX"),
+            EmbeddingProvider::Onnx => write!(f, "ONNX"),
         }
     }
 }
@@ -91,6 +91,7 @@ pub fn cosine_similarity(v1: ArrayView1<f32>, v2: ArrayView1<f32>) -> f32 {
 
 /// Calculates the cosine similarity between two Embedding instances.
 /// Returns an error if the embeddings have different dimensions.
+#[allow(dead_code)]
 pub fn embedding_similarity(e1: &Embedding, e2: &Embedding) -> EmbeddingResult<f32> {
     if e1.dimensions != e2.dimensions {
         return Err(ServerError::EmbeddingDimensionMismatch {

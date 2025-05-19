@@ -1,6 +1,6 @@
-use rustdocs_mcp_server::document_chunker::{DocumentChunker, Chunk};
+use rustdocs_mcp_server::document_chunker::DocumentChunker;
 use std::collections::HashSet;
-use std::io::{self, Read};
+use std::io;
 use std::time::Instant;
 
 fn main() -> io::Result<()> {
