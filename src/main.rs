@@ -12,16 +12,11 @@ mod tests;
 
 // Use necessary items from modules and crates
 use crate::{
-    doc_loader::Document,
-    embeddings::{
-        CachedDocumentEmbedding, Embedding, EmbeddingProvider, OPENAI_CLIENT, generate_embeddings,
-    },
+    embeddings::OPENAI_CLIENT,
     error::ServerError,
     server::RustDocsServer,
 };
 use async_openai::{Client as OpenAIClient, config::OpenAIConfig};
-use bincode::config;
-use cargo::core::PackageIdSpec;
 use clap::Parser;
 // Import rmcp items needed for the new approach
 use rmcp::{
@@ -31,13 +26,8 @@ use rmcp::{
 use std::{
     collections::hash_map::DefaultHasher,
     env,
-    fs::{self, File},
-    hash::{Hash, Hasher}, // Import hashing utilities
-    io::BufReader,
-    path::PathBuf,
+    hash::{Hash, Hasher},
 };
-#[cfg(not(target_os = "windows"))]
-use xdg::BaseDirectories;
 
 // --- CLI Argument Parsing ---
 
@@ -45,20 +35,6 @@ use xdg::BaseDirectories;
 #[command(author, version, about = "MCP server for querying Rust crate documentation", long_about = None)]
 struct Cli {
     // No required arguments - server will use locally available crate docs
-}
-
-// Helper function to create a stable hash from features
-fn hash_features(features: &Option<Vec<String>>) -> String {
-    features
-        .as_ref()
-        .map(|f| {
-            let mut sorted_features = f.clone();
-            sorted_features.sort_unstable(); // Sort for consistent hashing
-            let mut hasher = DefaultHasher::new();
-            sorted_features.hash(&mut hasher);
-            format!("{:x}", hasher.finish()) // Return hex representation of hash
-        })
-        .unwrap_or_else(|| "no_features".to_string()) // Use a specific string if no features
 }
 
 #[tokio::main]

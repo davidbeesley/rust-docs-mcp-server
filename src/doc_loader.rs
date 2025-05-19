@@ -23,13 +23,10 @@ pub enum DocLoaderError {
     WalkDir(#[from] walkdir::Error),
     #[error("CSS selector error: {0}")]
     Selector(String),
-    #[error("Temporary directory creation failed: {0}")]
-    TempDirCreationFailed(std::io::Error),
     #[error("Cargo library error: {0}")]
-    CargoLib(#[from] AnyhowError), // Re-add CargoLib variant
+    CargoLib(#[from] AnyhowError),
     #[error("Documentation not found: {0}")]
     DocNotFound(String),
-    // Removed unused StripPrefix variant
 }
 
 // Simple struct to hold document content, maybe add path later if needed
@@ -206,150 +203,6 @@ fn process_html_documents(
     Ok(documents)
 }
 
-/// Generates documentation for a given crate in a temporary directory,
-/// then loads and parses the HTML documents.
-/// Extracts text content from the main content area of rustdoc generated HTML.
-pub fn load_documents(
-    crate_name: &str,
-    crate_version_req: &str,
-    features: Option<&Vec<String>>, // Add optional features parameter
-) -> Result<Vec<Document>, DocLoaderError> {
-    let temp_dir = tempdir().map_err(DocLoaderError::TempDirCreationFailed)?;
-    let temp_dir_path = temp_dir.path();
-    let temp_manifest_path = temp_dir_path.join("Cargo.toml");
-
-    // Create a temporary Cargo.toml using the version requirement and features
-    let features_string = features
-        .filter(|f| !f.is_empty()) // Only add features if provided and not empty
-        .map(|f| {
-            let feature_list = f
-                .iter()
-                .map(|feat| format!("\"{}\"", feat))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(", features = [{}]", feature_list)
-        })
-        .unwrap_or_default(); // Use empty string if no features
-
-    let cargo_toml_content = format!(
-        r#"[package]
-name = "temp-doc-crate"
-version = "0.1.0"
-edition = "2021"
-
-[lib] # Add an empty lib target to satisfy Cargo
-
-[dependencies]
-{} = {{ version = "{}"{} }}
-"#,
-        crate_name,
-        crate_version_req,
-        features_string // Use the version requirement string and features string here
-    );
-
-    // Create the src directory and an empty lib.rs file
-    let src_path = temp_dir_path.join("src");
-    fs::create_dir_all(&src_path)?;
-    File::create(src_path.join("lib.rs"))?;
-
-    let mut temp_manifest_file = File::create(&temp_manifest_path)?;
-    temp_manifest_file.write_all(cargo_toml_content.as_bytes())?;
-
-    // --- Use Cargo API ---
-    let mut config = GlobalContext::default()?; // Make mutable
-    // Configure context (set quiet to false for more detailed errors)
-    config.configure(
-        0,     // verbose
-        true,  // quiet
-        None,  // color
-        false, // frozen
-        false, // locked
-        false, // offline
-        &None, // target_dir (Using ws.set_target_dir instead)
-        &[],   // unstable_flags
-        &[],   // cli_config
-    )?;
-
-    // Use the temporary manifest path for the Workspace
-    let mut ws = Workspace::new(&temp_manifest_path, &config)?; // Make ws mutable
-    // Set target_dir directly on Workspace
-    ws.set_target_dir(cargo::util::Filesystem::new(temp_dir_path.to_path_buf()));
-
-    // Create CompileOptions, relying on ::new for BuildConfig
-    let mut compile_opts = CompileOptions::new(
-        &config,
-        cargo::core::compiler::CompileMode::Doc {
-            deps: false,
-            json: false,
-        },
-    )?;
-    // Specify the package explicitly
-    let package_spec = crate_name.to_string(); // Just use name (with underscores)
-    compile_opts.cli_features = CliFeatures::new_all(false); // Use new_all(false) - applies to the temp crate, not dependency
-    compile_opts.spec = Packages::Packages(vec![package_spec.clone()]); // Clone spec
-
-    // Create DocOptions: Pass compile options
-    let doc_opts = DocOptions {
-        compile_opts,
-        open_result: false, // Don't open in browser
-        output_format: ops::OutputFormat::Html,
-    };
-
-    ops::doc(&ws, &doc_opts).map_err(DocLoaderError::CargoLib)?; // Use ws
-    // --- End Cargo API ---
-
-    // --- Find the actual documentation directory ---
-    // Iterate through subdirectories in `target/doc` and find the one containing `index.html`.
-    let base_doc_path = temp_dir_path.join("doc");
-
-    let mut target_docs_path: Option<PathBuf> = None;
-    let mut found_count = 0;
-
-    if base_doc_path.is_dir() {
-        for entry_result in fs::read_dir(&base_doc_path)? {
-            let entry = entry_result?;
-            if entry.file_type()?.is_dir() {
-                let dir_path = entry.path();
-                let index_html_path = dir_path.join("index.html");
-                if index_html_path.is_file() {
-                    if target_docs_path.is_none() {
-                        target_docs_path = Some(dir_path);
-                    }
-                    found_count += 1;
-                }
-            }
-        }
-    }
-
-    let docs_path = match (found_count, target_docs_path) {
-        (1, Some(path)) => path,
-        (0, _) => {
-            return Err(DocLoaderError::CargoLib(anyhow::anyhow!(
-                "Could not find any subdirectory containing index.html within '{}'. Cargo doc might have failed or produced unexpected output.",
-                base_doc_path.display()
-            )));
-        }
-        (count, _) => {
-            return Err(DocLoaderError::CargoLib(anyhow::anyhow!(
-                "Expected exactly one subdirectory containing index.html within '{}', but found {}. Cannot determine the correct documentation path.",
-                base_doc_path.display(),
-                count
-            )));
-        }
-    };
-    // --- End finding documentation directory ---
-
-    eprintln!("Using documentation path: {}", docs_path.display()); // Log the path we are actually using
-
-    // Process the HTML documents using our helper function
-    let documents = process_html_documents(&docs_path, crate_name)?;
-
-    eprintln!(
-        "Finished document loading. Found {} final documents.",
-        documents.len()
-    );
-    Ok(documents)
-}
 
 /// Loads documentation for a crate from the local cargo doc output directory.
 /// Extracts text content from the main content area of rustdoc generated HTML.

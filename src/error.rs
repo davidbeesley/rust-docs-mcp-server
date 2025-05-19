@@ -9,12 +9,9 @@ pub type Result<T> = std::result::Result<T, ServerError>;
 pub enum ServerError {
     #[error("Environment variable not set: {0}")]
     MissingEnvVar(String),
-    // MissingArgument removed as clap handles this now
-    #[error("Configuration Error: {0}")]
-    Config(String),
-
+    
     #[error("MCP Service Error: {0}")]
-    Mcp(#[from] ServiceError), // Use ServiceError
+    Mcp(#[from] ServiceError),
     #[error("IO Error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Document Loading Error: {0}")]
@@ -22,27 +19,17 @@ pub enum ServerError {
     #[error("OpenAI Error: {0}")]
     OpenAI(#[from] async_openai::error::OpenAIError),
     #[error("JSON Error: {0}")]
-    Json(#[from] serde_json::Error), // Add error for JSON deserialization
-    #[error("Tiktoken Error: {0}")]
-    Tiktoken(String),
-    #[error("XDG Directory Error: {0}")]
-    Xdg(String),
+    Json(#[from] serde_json::Error),
     #[error("MCP Runtime Error: {0}")]
     McpRuntime(String),
-
-    // New errors for embedding cache service
-    #[error("Embedding Provider Error: {0}")]
-    #[allow(dead_code)]
-    EmbeddingProvider(String),
-    #[error("Embedding Cache Error: {0}")]
-    #[allow(dead_code)]
-    EmbeddingCache(String),
+    
+    // These variants are used in utility functions
+    #[error("Configuration Error: {0}")]
+    Config(String),
+    
+    // Embedding related errors
     #[error("Embedding Dimension Mismatch: expected {expected}, got {actual}")]
-    #[allow(dead_code)]
     EmbeddingDimensionMismatch { expected: usize, actual: usize },
-    #[error("Unsupported Model Error: {0}")]
-    #[allow(dead_code)]
-    UnsupportedModel(String),
     #[error("Bincode Error: {0}")]
     Bincode(#[from] bincode::error::EncodeError),
     #[error("Bincode Decode Error: {0}")]
