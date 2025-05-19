@@ -2,7 +2,6 @@ use rustdocs_mcp_server::{
     doc_loader::{self, Document},
     document_chunker::DocumentChunker,
     embedding_cache_service::EmbeddingCacheService,
-    embeddings::{TestConfig, init_test_client},
     server::RustDocsServer,
 };
 use std::{env, path::Path};
@@ -25,13 +24,14 @@ async fn test_document_processing_pipeline() {
         return;
     }
     
-    // Initialize OpenAI client for testing using the safe test helper
-    if init_test_client().is_err() {
+    // Initialize OpenAI client
+    let client = async_openai::Client::new();
+    if rustdocs_mcp_server::embeddings::OPENAI_CLIENT.set(client).is_err() {
         println!("Failed to initialize OpenAI client, but continuing with test");
     }
     
-    // Test config provides default model names
-    let _config = TestConfig::default();
+    // Default embedding model name
+    let _embedding_model = "text-embedding-3-small";
         
     // 1. Load documents for the crate
     println!("1. Loading documents...");
@@ -112,8 +112,9 @@ async fn test_synthetic_pipeline() {
         }
     };
     
-    // Initialize OpenAI client for testing using the safe test helper
-    if init_test_client().is_err() {
+    // Initialize OpenAI client
+    let client = async_openai::Client::new();
+    if rustdocs_mcp_server::embeddings::OPENAI_CLIENT.set(client).is_err() {
         println!("Failed to initialize OpenAI client, but continuing with test");
     }
     

@@ -2,7 +2,6 @@
 mod module_tests {
     use crate::doc_loader::load_documents_from_cargo_doc;
     use crate::embedding_cache_service::EmbeddingCacheService;
-    use crate::embeddings::init_test_client;
     use std::env;
 
     // Helper function to set up test environment
@@ -46,9 +45,6 @@ mod module_tests {
     // This isn't an async test because we aren't actually testing the async calls
     fn test_embedding_cache_service() {
         setup_env();
-        
-        // Initialize the test client
-        let _ = init_test_client();
 
         // Create the embedding cache service
         let _service = match EmbeddingCacheService::new("dummy_key_for_tests".to_string()) {

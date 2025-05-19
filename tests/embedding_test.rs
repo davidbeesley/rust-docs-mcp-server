@@ -1,4 +1,4 @@
-use rustdocs_mcp_server::embeddings::{Embedding, EmbeddingProvider, cosine_similarity, TestConfig, init_test_client};
+use rustdocs_mcp_server::embeddings::{Embedding, EmbeddingProvider, cosine_similarity, OPENAI_CLIENT};
 use rustdocs_mcp_server::embedding_cache_service::EmbeddingCacheService;
 use ndarray::Array1;
 use std::env;
@@ -68,12 +68,14 @@ async fn test_embedding_cache_service() {
         }
     };
     
-    // Initialize test client and config - use a try-catch pattern to avoid panics
-    if init_test_client().is_err() {
+    // Initialize OpenAI client
+    let client = async_openai::Client::new();
+    if OPENAI_CLIENT.set(client).is_err() {
         println!("Failed to initialize OpenAI client, but continuing with test");
     }
     
-    let _config = TestConfig::default();
+    // Default embedding model
+    let _embedding_model = "text-embedding-3-small";
     
     // Create the embedding cache service
     let service = EmbeddingCacheService::new(api_key).expect("Failed to create embedding cache service");
@@ -115,8 +117,9 @@ async fn test_embedding_for_chunk() {
         }
     };
     
-    // Initialize test client - handle potential errors without panicking
-    if init_test_client().is_err() {
+    // Initialize OpenAI client
+    let client = async_openai::Client::new();
+    if OPENAI_CLIENT.set(client).is_err() {
         println!("Failed to initialize OpenAI client, but continuing with test");
     }
     

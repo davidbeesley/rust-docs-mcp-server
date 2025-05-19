@@ -1,4 +1,5 @@
-use rustdocs_mcp_server::embeddings::{TestConfig, init_test_client};
+use async_openai::{Client as OpenAIClient};
+use rustdocs_mcp_server::embeddings::OPENAI_CLIENT;
 use std::{env, path::Path};
 
 /// Initializes the test environment for tests that need an OpenAI client.
@@ -10,14 +11,12 @@ pub fn setup_openai_env() -> bool {
         return false;
     }
 
-    // Initialize OpenAI client using the safe test helper
-    if init_test_client().is_err() {
+    // Initialize OpenAI client
+    let client = OpenAIClient::new();
+    if OPENAI_CLIENT.set(client).is_err() {
         eprintln!("Failed to initialize OpenAI client");
         return false;
     }
-    
-    // Test config is used by tests to get model names without env vars
-    let _config = TestConfig::default();
     
     true
 }
