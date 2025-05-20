@@ -32,7 +32,7 @@ pub struct Document {
 
 /// Processes HTML documents from a directory, extracting content from the main content area.
 /// Used by both load_documents and load_documents_from_cargo_doc to avoid duplication.
-fn process_html_documents(
+pub fn process_html_documents(
     docs_path: &Path,
     crate_name: &str,
 ) -> Result<Vec<Document>, DocLoaderError> {
